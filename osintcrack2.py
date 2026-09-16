@@ -1597,7 +1597,10 @@ def handle_all_callbacks(call):
     # --- Force Join Check ---
     if data == "check_force_join":
         if check_force_join(user_id):
-            bot.answer_callback_query(call.id, "✅ Verified! Welcome!")
+            try:
+                bot.answer_callback_query(call.id, "✅ Verified! Welcome!")
+            except Exception:
+                pass
             try:
                 bot.delete_message(chat_id, call.message.message_id)
             except:

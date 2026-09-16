@@ -27,8 +27,8 @@ DEVELOPER_LINK = 'https://t.me/+FWjX6RK2YnhiOTA9'
 # 'name' = Button pe dikhne wala naam
 FORCE_JOIN_CHANNELS = [
     {
-        "id": -1003978365345,                        # ← Apna channel ID dalo
-        "link": "https://t.me/+FWjX6RK2YnhiOTA9",  # ← Apna invite link dalo
+        "id": -1003985746268,                        # ← Apn404647484a channel ID dalo
+        "link": "https://t.me/+NXtwrbNr9CtlMTY1",  # ← Apna invite link dalo
         "name": "CRACK Channel"                      # ← Display name
     }
 ]

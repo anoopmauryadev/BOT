@@ -588,9 +588,9 @@ def format_address(address_string):
         return "N/A"
     return address_string.replace('!!!!', ', ').replace('!!!', ', ').replace('!!', ', ').replace('!', ', ')
 
-def auto_delete_message(chat_id, message_id):
+def auto_delete_message(chat_id, message_id, timeout=30):
     def delete():
-        time.sleep(30)
+        time.sleep(timeout)
         try:
             bot.delete_message(chat_id, message_id)
         except Exception:
@@ -599,18 +599,22 @@ def auto_delete_message(chat_id, message_id):
 
 def wrapped_send_message(chat_id, text, *args, **kwargs):
     is_announcement = kwargs.pop('is_announcement', False)
+    skip_delete = kwargs.pop('skip_delete', False)
+    delete_after = kwargs.pop('delete_after', 30)
     is_admin_log = (chat_id == ADMIN_USER_ID)
     msg = bot.send_message(chat_id, text, *args, **kwargs)
-    if not is_announcement and not is_admin_log:
-        auto_delete_message(chat_id, msg.message_id)
+    if not is_announcement and not is_admin_log and not skip_delete:
+        auto_delete_message(chat_id, msg.message_id, timeout=delete_after)
     return msg
 
 def wrapped_reply_to(message, text, *args, **kwargs):
     is_announcement = kwargs.pop('is_announcement', False)
+    skip_delete = kwargs.pop('skip_delete', False)
+    delete_after = kwargs.pop('delete_after', 30)
     is_admin_log = (message.chat.id == ADMIN_USER_ID)
     msg = bot.reply_to(message, text, *args, **kwargs)
-    if not is_announcement and not is_admin_log:
-        auto_delete_message(message.chat.id, msg.message_id)
+    if not is_announcement and not is_admin_log and not skip_delete:
+        auto_delete_message(message.chat.id, msg.message_id, timeout=delete_after)
     return msg
 
 # ============================================================
@@ -797,7 +801,7 @@ def show_menu(chat_id):
         admin_btn = types.KeyboardButton("⚙️ Admin Panel")
         markup.add(admin_btn)
     
-    wrapped_send_message(chat_id, "✅ Choose an option below:", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(chat_id, "✅ Choose an option below:", parse_mode="Markdown", reply_markup=markup)
 
 def check_ban_status(user_id, chat_id):
     if is_user_banned(user_id):
@@ -897,7 +901,8 @@ def show_payment_methods(chat_id, plan_type, amount, credits_requested=0):
     msg += f"💰 Amount: *₹{amount}*\n\n"
     msg += "👇 Payment method choose karo:"
     
-    bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=markup)
+    msg_sent = bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=markup)
+    auto_delete_message(chat_id, msg_sent.message_id, timeout=900)
 
 def show_upi_payment(chat_id):
     """Show UPI payment details"""
@@ -933,6 +938,7 @@ def show_upi_payment(chat_id):
         # Fallback to text if QR fails to load
         sent_msg = bot.send_message(chat_id, msg, parse_mode="Markdown")
         
+    auto_delete_message(chat_id, sent_msg.message_id, timeout=900)
     bot.register_next_step_handler(sent_msg, process_upi_transaction_id)
 
 def show_usdt_payment(chat_id):
@@ -962,6 +968,7 @@ def show_usdt_payment(chat_id):
     msg += f"📝 *Ab neeche apna Transaction Hash type karo:*"
     
     sent_msg = bot.send_message(chat_id, msg, parse_mode="Markdown")
+    auto_delete_message(chat_id, sent_msg.message_id, timeout=900)
     bot.register_next_step_handler(sent_msg, process_usdt_transaction_id)
 
 def process_upi_transaction_id(message):

@@ -6,14 +6,15 @@ import sqlite3
 import threading
 import random
 import string
+import urllib.parse
 from datetime import datetime, timedelta
 
 # ============================================================
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = '8695416122:AAF9VbmCANNid1sisYu_z3UShz9pzuGR4oE'
-ADMIN_USER_ID = 8715289040
+BOT_TOKEN = '8903667323:AAHAMIMgDypDLF45TZ9rcmn9NEC629_HGXY'
+ADMIN_USER_ID = 8637412597
 ADMIN_USERNAME = "admin"
 API_KEY = "mysecretkey123"
 BOT_NAME = "CRACK"
@@ -565,6 +566,23 @@ def send_force_join_message(chat_id):
 #                 HELPER / UTILITY FUNCTIONS
 # ============================================================
 
+
+def is_command_or_menu(message):
+    if not message.text:
+        return False
+    if message.text.startswith('/'):
+        bot.process_new_messages([message])
+        return True
+    
+    menu_buttons = [
+        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
+        "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer", "⚙️ Admin Panel"
+    ]
+    if message.text in menu_buttons:
+        bot.process_new_messages([message])
+        return True
+    return False
+
 def format_address(address_string):
     if not address_string or address_string == "N/A":
         return "N/A"
@@ -774,6 +792,11 @@ def show_menu(chat_id):
     markup.add(vip_btn, account_btn)
     markup.add(dev_btn)
     
+    # Add admin panel button only for the admin
+    if chat_id == ADMIN_USER_ID:
+        admin_btn = types.KeyboardButton("⚙️ Admin Panel")
+        markup.add(admin_btn)
+    
     wrapped_send_message(chat_id, "✅ Choose an option below:", parse_mode="Markdown", reply_markup=markup)
 
 def check_ban_status(user_id, chat_id):
@@ -887,6 +910,11 @@ def show_upi_payment(chat_id):
     amount = flow['amount']
     plan_name = "Monthly Unlimited" if flow['plan_type'] == 'monthly' else f"{flow['credits_requested']} Credits"
     
+    # Generate UPI URL
+    upi_url = f"upi://pay?pa={upi_id}&pn={urllib.parse.quote(BOT_NAME)}&am={amount}&cu=INR"
+    encoded_upi_url = urllib.parse.quote(upi_url)
+    qr_url = f"https://quickchart.io/qr?text={encoded_upi_url}&size=300&margin=2"
+    
     msg = f"💳 *UPI Payment*\n\n"
     msg += f"━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"📦 Plan: *{plan_name}*\n"
@@ -894,12 +922,17 @@ def show_upi_payment(chat_id):
     msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     msg += f"📲 *UPI ID:* `{upi_id}`\n\n"
     msg += f"⚠️ *Instructions:*\n"
-    msg += f"1️⃣ UPI ID copy karo ☝️\n"
+    msg += f"1️⃣ Scan the QR Code OR copy the UPI ID ☝️\n"
     msg += f"2️⃣ ₹{amount} pay karo\n"
     msg += f"3️⃣ Payment ke baad Transaction ID / UTR Number bhejo\n\n"
     msg += f"📝 *Ab neeche apna Transaction ID type karo:*"
     
-    sent_msg = bot.send_message(chat_id, msg, parse_mode="Markdown")
+    try:
+        sent_msg = bot.send_photo(chat_id, qr_url, caption=msg, parse_mode="Markdown")
+    except Exception as e:
+        # Fallback to text if QR fails to load
+        sent_msg = bot.send_message(chat_id, msg, parse_mode="Markdown")
+        
     bot.register_next_step_handler(sent_msg, process_upi_transaction_id)
 
 def show_usdt_payment(chat_id):
@@ -936,8 +969,7 @@ def process_upi_transaction_id(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     
-    if message.text and message.text.startswith('/'):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
     
     transaction_id = message.text.strip() if message.text else ""
@@ -1007,8 +1039,7 @@ def process_usdt_transaction_id(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     
-    if message.text and message.text.startswith('/'):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
     
     transaction_id = message.text.strip() if message.text else ""
@@ -1083,8 +1114,7 @@ def process_credit_amount_input(message):
     """Process credit amount input"""
     chat_id = message.chat.id
     
-    if message.text and message.text.startswith('/'):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
     
     if message.text and message.text in ["🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"]:
@@ -1422,36 +1452,44 @@ def give_command(message):
         bot.reply_to(message, "❌ Invalid values.")
 
 def gencode_command(message):
-    """Admin: /gencode monthly <days> or /gencode credits <amount>"""
+    """Admin: /gencode monthly <days> [quantity] or /gencode credits <amount> [quantity]"""
     if message.from_user.id != ADMIN_USER_ID:
         wrapped_reply_to(message, "❌ Unauthorized.")
         return
     
     parts = message.text.split()
     if len(parts) < 3:
-        bot.reply_to(message, "Usage:\n`/gencode monthly <days>`\n`/gencode credits <amount>`", parse_mode="Markdown")
+        bot.reply_to(message, "Usage:\n`/gencode monthly <days> [quantity]`\n`/gencode credits <amount> [quantity]`", parse_mode="Markdown")
         return
     
     try:
         code_type = parts[1].strip().lower()
         amount = int(parts[2].strip())
+        quantity = int(parts[3].strip()) if len(parts) > 3 else 1
         
+        if quantity > 50:
+            bot.reply_to(message, "❌ Maximum 50 codes at a time.")
+            return
+            
         if code_type in ['monthly', 'credits']:
-            code = generate_redeem_code(code_type, amount)
+            generated_codes = []
+            for _ in range(quantity):
+                code = generate_redeem_code(code_type, amount)
+                generated_codes.append(f"`{code}`")
             
             value_text = f"{amount} days membership" if code_type == 'monthly' else f"{amount} credits"
             
-            msg = f"🎟️ *Redeem Code Generated!*\n\n"
-            msg += f"📋 Code: `{code}`\n"
+            msg = f"🎟️ *{quantity} Redeem Code(s) Generated!*\n\n"
             msg += f"📦 Type: {code_type.title()}\n"
             msg += f"💎 Value: {value_text}\n\n"
-            msg += f"Share this code with user!"
+            msg += f"📋 Codes:\n" + "\n".join(generated_codes) + "\n\n"
+            msg += f"Share these codes with users! (1 time use only)"
             
             bot.reply_to(message, msg, parse_mode="Markdown")
         else:
             bot.reply_to(message, "❌ Use `monthly` or `credits`.", parse_mode="Markdown")
     except ValueError:
-        bot.reply_to(message, "❌ Invalid amount.")
+        bot.reply_to(message, "❌ Invalid amount or quantity.")
 
 def settings_command(message):
     if message.from_user.id != ADMIN_USER_ID:
@@ -2030,8 +2068,7 @@ def process_redeem_code_input(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     
-    if message.text and message.text.startswith('/'):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
     
     if message.text and message.text in ["🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"]:
@@ -2068,7 +2105,7 @@ def process_redeem_code_input(message):
 
 @bot.message_handler(func=lambda message: message.text in [
     "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
-    "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"
+    "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer", "⚙️ Admin Panel"
 ])
 def handle_menu_buttons(message):
     if check_ban_status(message.from_user.id, message.chat.id):
@@ -2100,6 +2137,8 @@ def handle_menu_buttons(message):
         show_my_account(message)
     elif message.text == "💬 Chat with Developer":
         chat_with_dev(message)
+    elif message.text == "⚙️ Admin Panel" and message.chat.id == ADMIN_USER_ID:
+        admin_command(message)
 
 # ============================================================
 #                 MY ACCOUNT

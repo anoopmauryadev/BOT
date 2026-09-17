@@ -1326,10 +1326,15 @@ def show_user_details_admin(chat_id, target_user_id):
     is_banned = is_user_banned(target_user_id)
     has_membership = has_active_membership(target_user_id)
     
+    # Escape markdown special chars in user fields
+    safe_first = (user_info['first_name'] or 'N/A').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+    safe_last = (user_info['last_name'] or '').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+    safe_username = (user_info['username'] or 'N/A').replace('_', '\\_')
+    
     msg = f"👤 *User Details*\n\n"
     msg += f"🆔 ID: `{target_user_id}`\n"
-    msg += f"👤 Name: {user_info['first_name'] or 'N/A'} {user_info['last_name'] or ''}\n"
-    msg += f"📛 Username: @{user_info['username'] or 'N/A'}\n"
+    msg += f"👤 Name: {safe_first} {safe_last}\n"
+    msg += f"📛 Username: @{safe_username}\n"
     msg += f"📅 Joined: {user_info['date_joined']}\n\n"
     
     if user_credits_info:

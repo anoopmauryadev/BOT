@@ -7,6 +7,7 @@ import threading
 import random
 import string
 import urllib.parse
+import uuid
 from datetime import datetime, timedelta
 
 # ============================================================
@@ -137,6 +138,11 @@ def init_db():
     
     try:
         c.execute('ALTER TABLE user_credits ADD COLUMN last_daily_credit_date DATE')
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        c.execute('ALTER TABLE redeem_codes ADD COLUMN batch_id TEXT')
     except sqlite3.OperationalError:
         pass
     
@@ -500,18 +506,18 @@ def reject_payment(request_id, admin_id):
 #                 REDEEM CODE FUNCTIONS
 # ============================================================
 
-def generate_redeem_code(plan_type, amount):
+def generate_redeem_code(plan_type, amount, batch_id=None):
     """Generate a unique redeem code"""
     code = 'CRACK-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     conn = get_db()
     c = conn.cursor()
     
     if plan_type == 'monthly':
-        c.execute('INSERT INTO redeem_codes (code, plan_type, days_amount) VALUES (?, ?, ?)',
-                  (code, 'monthly', amount))
+        c.execute('INSERT INTO redeem_codes (code, plan_type, days_amount, batch_id) VALUES (?, ?, ?, ?)',
+                  (code, 'monthly', amount, batch_id))
     elif plan_type == 'credits':
-        c.execute('INSERT INTO redeem_codes (code, plan_type, credits_amount) VALUES (?, ?, ?)',
-                  (code, 'credits', amount))
+        c.execute('INSERT INTO redeem_codes (code, plan_type, credits_amount, batch_id) VALUES (?, ?, ?, ?)',
+                  (code, 'credits', amount, batch_id))
     
     conn.commit()
     conn.close()
@@ -531,6 +537,14 @@ def redeem_code(code, user_id):
     if result['is_used'] == 1:
         conn.close()
         return False, "❌ This code has already been used!", None
+    
+    # Check if user already redeemed a code from the same batch
+    batch_id = result.get('batch_id')
+    if batch_id:
+        c.execute('SELECT code FROM redeem_codes WHERE batch_id = ? AND used_by = ?', (batch_id, user_id))
+        if c.fetchone():
+            conn.close()
+            return False, "❌ You have already claimed a code from this giveaway!", None
     
     # Mark code as used
     c.execute('UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE code = ?',
@@ -1196,10 +1210,12 @@ def show_admin_panel(chat_id):
     settings_btn = types.InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
     stats_btn = types.InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")
     report_btn = types.InlineKeyboardButton("📄 Gen Users Report", callback_data="admin_report")
+    manage_user_btn = types.InlineKeyboardButton("👤 Manage User", callback_data="admin_manage_user")
     
     markup.add(users_btn, payments_btn)
     markup.add(codes_btn, settings_btn)
     markup.add(stats_btn, report_btn)
+    markup.add(manage_user_btn)
     
     msg = f"⚙️ *{BOT_NAME} — Admin Panel*\n\n"
     msg += f"👥 Total Users: *{total_users}*\n"
@@ -1336,9 +1352,10 @@ def show_user_details_admin(chat_id, target_user_id):
         ban_btn = types.InlineKeyboardButton("🚫 Ban", callback_data=f"admin_ban_{target_user_id}")
     
     back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="admin_back")
+    remove_credits_btn = types.InlineKeyboardButton("➖ Remove Credits", callback_data=f"admin_remove_credits_{target_user_id}")
     
     markup.add(credits_btn, membership_btn)
-    markup.add(ban_btn)
+    markup.add(remove_credits_btn, ban_btn)
     markup.add(back_btn)
     
     bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=markup)
@@ -1442,11 +1459,21 @@ def user_info_command(message):
     
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, "Usage: `/user <user_id>`", parse_mode="Markdown")
+        msg = bot.reply_to(message, "Please enter the User ID you want to inspect:", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_user_id_input)
         return
     
     try:
         target_id = int(parts[1].strip())
+        show_user_details_admin(message.chat.id, target_id)
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid user ID.")
+
+def process_admin_user_id_input(message):
+    if is_command_or_menu(message):
+        return
+    try:
+        target_id = int(message.text.strip())
         show_user_details_admin(message.chat.id, target_id)
     except ValueError:
         bot.reply_to(message, "❌ Invalid user ID.")
@@ -1509,8 +1536,9 @@ def gencode_command(message):
             
         if code_type in ['monthly', 'credits']:
             generated_codes = []
+            batch_id = str(uuid.uuid4())
             for _ in range(quantity):
-                code = generate_redeem_code(code_type, amount)
+                code = generate_redeem_code(code_type, amount, batch_id)
                 generated_codes.append(f"`{code}`")
             
             value_text = f"{amount} days membership" if code_type == 'monthly' else f"{amount} credits"
@@ -1833,6 +1861,15 @@ def handle_all_callbacks(call):
         show_admin_panel(chat_id)
         return
     
+    if data == "admin_manage_user":
+        if user_id != ADMIN_USER_ID:
+            bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(chat_id, "Please enter the User ID you want to manage:", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_user_id_input)
+        return
+    
     if data == "admin_users":
         if user_id != ADMIN_USER_ID:
             bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
@@ -2067,6 +2104,17 @@ def handle_all_callbacks(call):
         bot.register_next_step_handler(msg, process_admin_config_input)
         return
     
+    if data.startswith("admin_remove_credits_"):
+        if user_id != ADMIN_USER_ID:
+            bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        target_id = int(data.replace("admin_remove_credits_", ""))
+        admin_input_handler[user_id] = f'remove_credits_{target_id}'
+        msg = bot.send_message(chat_id, f"➖ User `{target_id}` se kitne credits remove karne hain?", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_config_input)
+        return
+    
     if data.startswith("admin_give_membership_"):
         if user_id != ADMIN_USER_ID:
             bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
@@ -2160,6 +2208,29 @@ def process_admin_config_input(message):
                 bot.send_message(target_id, f"🎁 *Gift from Admin!*\n\nAapko {amount} search credits mile hain! 🎉", parse_mode="Markdown")
             except:
                 pass
+        except ValueError:
+            bot.send_message(message.chat.id, "❌ Invalid number.")
+    elif handler_type.startswith('remove_credits_'):
+        target_id = int(handler_type.replace('remove_credits_', ''))
+        try:
+            amount = int(text)
+            if amount <= 0:
+                bot.send_message(message.chat.id, "❌ Amount must be positive.")
+                return
+            ensure_user_credits(target_id)
+            conn = get_db()
+            try:
+                c = conn.cursor()
+                c.execute('SELECT credits FROM user_credits WHERE user_id = ?', (target_id,))
+                row = c.fetchone()
+                current = row['credits'] if row else 0
+                new_balance = max(0, current - amount)
+                c.execute('UPDATE user_credits SET credits = ? WHERE user_id = ?', (new_balance, target_id))
+                conn.commit()
+            finally:
+                conn.close()
+            removed = current - new_balance
+            bot.send_message(message.chat.id, f"✅ {removed} credits removed from user `{target_id}`!\n💰 New balance: {new_balance}", parse_mode="Markdown")
         except ValueError:
             bot.send_message(message.chat.id, "❌ Invalid number.")
 

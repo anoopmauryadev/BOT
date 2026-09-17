@@ -93,7 +93,9 @@ def init_db():
                   free_credits_given INTEGER DEFAULT 0,
                   membership_type TEXT DEFAULT 'none',
                   membership_expiry TIMESTAMP,
-                  total_searches INTEGER DEFAULT 0)''')
+                  total_searches INTEGER DEFAULT 0,
+                  daily_free_credits INTEGER DEFAULT 0,
+                  last_daily_credit_date DATE)''')
     
     # Payment Requests
     c.execute('''CREATE TABLE IF NOT EXISTS payment_requests
@@ -127,6 +129,16 @@ def init_db():
     # Insert default settings if not exists
     for key, value in DEFAULT_SETTINGS.items():
         c.execute('INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)', (key, value))
+        
+    try:
+        c.execute('ALTER TABLE user_credits ADD COLUMN daily_free_credits INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
+    
+    try:
+        c.execute('ALTER TABLE user_credits ADD COLUMN last_daily_credit_date DATE')
+    except sqlite3.OperationalError:
+        pass
     
     conn.commit()
     conn.close()
@@ -274,6 +286,14 @@ def ensure_user_credits(user_id):
     conn = get_db()
     c = conn.cursor()
     c.execute('INSERT OR IGNORE INTO user_credits (user_id, credits, free_credits_given) VALUES (?, 0, 0)', (user_id,))
+    
+    # Check daily free credit
+    c.execute('SELECT last_daily_credit_date FROM user_credits WHERE user_id = ?', (user_id,))
+    row = c.fetchone()
+    today = datetime.date.today().isoformat()
+    if row and row['last_daily_credit_date'] != today:
+        c.execute('UPDATE user_credits SET daily_free_credits = 1, last_daily_credit_date = ? WHERE user_id = ?', (today, user_id))
+    
     conn.commit()
     conn.close()
 
@@ -328,15 +348,25 @@ def deduct_credit(user_id):
         conn.close()
         return True
     
-    if user_info['credits'] <= 0:
-        return False
+    # Prioritize daily free credits
+    if 'daily_free_credits' in user_info.keys() and user_info['daily_free_credits'] > 0:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE user_credits SET daily_free_credits = daily_free_credits - 1, total_searches = total_searches + 1 WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+        
+    # Then fallback to regular credits
+    if user_info['credits'] > 0:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE user_credits SET credits = credits - 1, total_searches = total_searches + 1 WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        return True
     
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('UPDATE user_credits SET credits = credits - 1, total_searches = total_searches + 1 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    return True
+    return False
 
 def has_active_membership(user_id):
     """Check if user has active (non-expired) membership"""
@@ -1167,10 +1197,11 @@ def show_admin_panel(chat_id):
     codes_btn = types.InlineKeyboardButton("🎟️ Gen Codes", callback_data="admin_codes")
     settings_btn = types.InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")
     stats_btn = types.InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")
+    report_btn = types.InlineKeyboardButton("📄 Gen Users Report", callback_data="admin_report")
     
     markup.add(users_btn, payments_btn)
     markup.add(codes_btn, settings_btn)
-    markup.add(stats_btn)
+    markup.add(stats_btn, report_btn)
     
     msg = f"⚙️ *{BOT_NAME} — Admin Panel*\n\n"
     msg += f"👥 Total Users: *{total_users}*\n"
@@ -1819,6 +1850,67 @@ def handle_all_callbacks(call):
                         "`/give <user_id> membership <days>`",
                         parse_mode="Markdown")
         return
+        
+    if data == "admin_report":
+        if user_id != ADMIN_USER_ID:
+            bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
+            return
+        
+        bot.answer_callback_query(call.id, "⏳ Generating report... Please wait.")
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Get VIP users
+        c.execute('''
+            SELECT u.user_id, u.username, u.first_name, c.membership_expiry 
+            FROM users u JOIN user_credits c ON u.user_id = c.user_id 
+            WHERE c.membership_expiry > CURRENT_TIMESTAMP
+            ORDER BY c.membership_expiry DESC
+        ''')
+        vip_users = c.fetchall()
+        
+        # Get All users with credits
+        c.execute('''
+            SELECT u.user_id, u.username, u.first_name, c.credits, c.daily_free_credits 
+            FROM users u JOIN user_credits c ON u.user_id = c.user_id
+            ORDER BY c.credits DESC
+        ''')
+        all_users = c.fetchall()
+        
+        conn.close()
+        
+        # Build report text
+        report_text = f"=== {BOT_NAME} - Users Report ===\n"
+        report_text += f"Generated At: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        report_text += f"--- VIP USERS ({len(vip_users)}) ---\n"
+        if not vip_users:
+            report_text += "No VIP users found.\n"
+        else:
+            for row in vip_users:
+                username = f"@{row['username']}" if row['username'] else "No Username"
+                report_text += f"ID: {row['user_id']} | Name: {row['first_name']} | {username} | Expiry: {row['membership_expiry']}\n"
+                
+        report_text += f"\n\n--- ALL USERS CREDITS ({len(all_users)}) ---\n"
+        for row in all_users:
+            username = f"@{row['username']}" if row['username'] else "No Username"
+            report_text += f"ID: {row['user_id']} | Name: {row['first_name']} | {username} | Premium Credits: {row['credits']} | Daily: {row['daily_free_credits']}\n"
+            
+        # Write to file
+        import os
+        filename = "users_report.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(report_text)
+            
+        # Send file
+        with open(filename, "rb") as f:
+            bot.send_document(chat_id, f, caption="✅ Users Report Generated.")
+        
+        # Clean up
+        if os.path.exists(filename):
+            os.remove(filename)
+        return
     
     if data == "admin_payments":
         if user_id != ADMIN_USER_ID:
@@ -2161,6 +2253,7 @@ def show_my_account(message):
     
     has_vip = has_active_membership(user_id)
     credits = user_info['credits'] if user_info else 0
+    daily_credits = user_info['daily_free_credits'] if (user_info and 'daily_free_credits' in user_info.keys()) else 0
     total_searches = user_info['total_searches'] if user_info else 0
     
     msg = f"👤 *My Account — {BOT_NAME}*\n\n"
@@ -2175,7 +2268,8 @@ def show_my_account(message):
         msg += f"📅 *Expiry:* `{expiry}`\n"
         msg += f"🔓 *Searches:* Unlimited\n"
     else:
-        msg += f"💰 *Credits:* {credits}\n"
+        msg += f"🎁 *Daily Free Credit:* {daily_credits} (Resets at midnight)\n"
+        msg += f"💰 *Premium Credits:* {credits}\n"
         msg += f"💎 *Status:* Free User\n"
     
     msg += f"\n🔍 *Total Searches:* {total_searches}\n"

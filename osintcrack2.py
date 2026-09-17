@@ -539,7 +539,10 @@ def redeem_code(code, user_id):
         return False, "❌ This code has already been used!", None
     
     # Check if user already redeemed a code from the same batch
-    batch_id = result.get('batch_id')
+    try:
+        batch_id = result['batch_id']
+    except (IndexError, KeyError):
+        batch_id = None
     if batch_id:
         c.execute('SELECT code FROM redeem_codes WHERE batch_id = ? AND used_by = ?', (batch_id, user_id))
         if c.fetchone():

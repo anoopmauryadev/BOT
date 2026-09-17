@@ -2675,6 +2675,12 @@ def handle_all_messages(message):
         send_force_join_message(message.chat.id)
         return
     
+    # Check if user directly sent a 10-digit number
+    query = message.text.replace(" ", "") if message.text else ""
+    if query and query.isdigit() and len(query) == 10:
+        process_number_input(message)
+        return
+    
     show_menu(message.chat.id)
 
 # ============================================================

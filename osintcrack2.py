@@ -1156,10 +1156,6 @@ def process_credit_amount_input(message):
     if is_command_or_menu(message):
         return
     
-    if message.text and message.text in ["🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"]:
-        bot.process_new_messages([message])
-        return
-    
     try:
         amount = int(message.text.strip())
         if amount < 10:
@@ -2175,9 +2171,7 @@ def process_redeem_code_input(message):
     if is_command_or_menu(message):
         return
     
-    if message.text and message.text in ["🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"]:
-        bot.process_new_messages([message])
-        return
+
     
     code = message.text.strip().upper() if message.text else ""
     
@@ -2312,11 +2306,7 @@ def process_number_input(message):
         try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
         except: pass
     
-    if message.text and (message.text.startswith('/') or message.text in [
-        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
-        "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"
-    ]):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
         
     query = message.text.replace(" ", "") if message.text else ""
@@ -2413,11 +2403,7 @@ def process_aadhaar_info_input(message):
         try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
         except: pass
         
-    if message.text and (message.text.startswith('/') or message.text in [
-        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info",
-        "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"
-    ]):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
         
     query = message.text.replace(" ", "") if message.text else ""
@@ -2482,11 +2468,7 @@ def process_family_info_input(message):
     if message.chat.id != ADMIN_USER_ID:
         try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
         except: pass
-    if message.text and (message.text.startswith('/') or message.text in [
-        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info",
-        "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"
-    ]):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
         
     query = message.text.replace(" ", "") if message.text else ""
@@ -2546,11 +2528,7 @@ def process_vehicle_info_input(message):
     if message.chat.id != ADMIN_USER_ID:
         try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
         except: pass
-    if message.text and (message.text.startswith('/') or message.text in [
-        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info",
-        "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer"
-    ]):
-        bot.process_new_messages([message])
+    if is_command_or_menu(message):
         return
     
     query = message.text.replace(" ", "").upper() if message.text else ""

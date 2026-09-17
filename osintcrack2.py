@@ -284,18 +284,20 @@ def get_all_banned_users():
 def ensure_user_credits(user_id):
     """Make sure user has a row in user_credits table"""
     conn = get_db()
-    c = conn.cursor()
-    c.execute('INSERT OR IGNORE INTO user_credits (user_id, credits, free_credits_given) VALUES (?, 0, 0)', (user_id,))
-    
-    # Check daily free credit
-    c.execute('SELECT last_daily_credit_date FROM user_credits WHERE user_id = ?', (user_id,))
-    row = c.fetchone()
-    today = datetime.date.today().isoformat()
-    if row and row['last_daily_credit_date'] != today:
-        c.execute('UPDATE user_credits SET daily_free_credits = 1, last_daily_credit_date = ? WHERE user_id = ?', (today, user_id))
-    
-    conn.commit()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute('INSERT OR IGNORE INTO user_credits (user_id, credits, free_credits_given) VALUES (?, 0, 0)', (user_id,))
+        
+        # Check daily free credit
+        c.execute('SELECT last_daily_credit_date FROM user_credits WHERE user_id = ?', (user_id,))
+        row = c.fetchone()
+        today = datetime.now().date().isoformat()
+        if row and row['last_daily_credit_date'] != today:
+            c.execute('UPDATE user_credits SET daily_free_credits = 1, last_daily_credit_date = ? WHERE user_id = ?', (today, user_id))
+        
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_user_credits(user_id):
     """Get user's credit info"""
@@ -1882,7 +1884,7 @@ def handle_all_callbacks(call):
         
         # Build report text
         report_text = f"=== {BOT_NAME} - Users Report ===\n"
-        report_text += f"Generated At: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        report_text += f"Generated At: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         
         report_text += f"--- VIP USERS ({len(vip_users)}) ---\n"
         if not vip_users:

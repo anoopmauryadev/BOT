@@ -506,9 +506,10 @@ def reject_payment(request_id, admin_id):
 #                 REDEEM CODE FUNCTIONS
 # ============================================================
 
-def generate_redeem_code(plan_type, amount, batch_id=None):
+def generate_redeem_code(plan_type, amount, batch_id=None, is_free=False):
     """Generate a unique redeem code"""
-    code = 'CRACK-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    prefix = 'FREE-' if is_free else 'CRACK-'
+    code = prefix + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     conn = get_db()
     c = conn.cursor()
     
@@ -1523,20 +1524,33 @@ def give_command(message):
         bot.reply_to(message, "❌ Invalid values.")
 
 def gencode_command(message):
-    """Admin: /gencode monthly <days> [quantity] or /gencode credits <amount> [quantity]"""
+    """Admin: /gencode free credits <amount> [qty] or /gencode paid credits <amount> [qty]"""
     if message.from_user.id != ADMIN_USER_ID:
         wrapped_reply_to(message, "❌ Unauthorized.")
         return
     
     parts = message.text.split()
-    if len(parts) < 3:
-        bot.reply_to(message, "Usage:\n`/gencode monthly <days> [quantity]`\n`/gencode credits <amount> [quantity]`", parse_mode="Markdown")
+    if len(parts) < 4:
+        bot.reply_to(message, 
+            "Usage:\n"
+            "`/gencode free credits <amount> [qty]`\n"
+            "`/gencode free monthly <days> [qty]`\n"
+            "`/gencode paid credits <amount> [qty]`\n"
+            "`/gencode paid monthly <days> [qty]`\n\n"
+            "🆓 *Free* = 1 user sirf 1 code use kar payega (batch limit)\n"
+            "💰 *Paid* = Har code independent, no limit", 
+            parse_mode="Markdown")
         return
     
     try:
-        code_type = parts[1].strip().lower()
-        amount = int(parts[2].strip())
-        quantity = int(parts[3].strip()) if len(parts) > 3 else 1
+        mode = parts[1].strip().lower()  # free or paid
+        code_type = parts[2].strip().lower()  # credits or monthly
+        amount = int(parts[3].strip())
+        quantity = int(parts[4].strip()) if len(parts) > 4 else 1
+        
+        if mode not in ['free', 'paid']:
+            bot.reply_to(message, "❌ Use `free` or `paid` as first argument.", parse_mode="Markdown")
+            return
         
         if quantity > 50:
             bot.reply_to(message, "❌ Maximum 50 codes at a time.")
@@ -1544,18 +1558,25 @@ def gencode_command(message):
             
         if code_type in ['monthly', 'credits']:
             generated_codes = []
-            batch_id = str(uuid.uuid4())
+            is_free = (mode == 'free')
+            batch_id = str(uuid.uuid4()) if is_free else None
+            
             for _ in range(quantity):
-                code = generate_redeem_code(code_type, amount, batch_id)
+                code = generate_redeem_code(code_type, amount, batch_id, is_free)
                 generated_codes.append(f"`{code}`")
             
             value_text = f"{amount} days membership" if code_type == 'monthly' else f"{amount} credits"
+            mode_text = "🆓 FREE (1 per user)" if is_free else "💰 PAID (no limit)"
             
             msg = f"🎟️ *{quantity} Redeem Code(s) Generated!*\n\n"
             msg += f"📦 Type: {code_type.title()}\n"
-            msg += f"💎 Value: {value_text}\n\n"
+            msg += f"💎 Value: {value_text}\n"
+            msg += f"🔖 Mode: {mode_text}\n\n"
             msg += f"📋 Codes:\n" + "\n".join(generated_codes) + "\n\n"
-            msg += f"Share these codes with users! (1 time use only)"
+            if is_free:
+                msg += f"⚠️ Ek user is batch ka sirf 1 code use kar payega!"
+            else:
+                msg += f"✅ Har code independent hai, koi limit nahi!"
             
             bot.reply_to(message, msg, parse_mode="Markdown")
         else:

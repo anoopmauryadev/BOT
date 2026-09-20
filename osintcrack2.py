@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = '8903667323:AAHAMIMgDypDLF45TZ9rcmn9NEC629_HGXY'
+BOT_TOKEN = '8695416122:AAF9VbmCANNid1sisYu_z3UShz9pzuGR4oE'
 ADMIN_USER_ID = 8637412597
 ADMIN_USERNAME = "admin"
 API_KEY = "mysecretkey123"
@@ -43,8 +43,8 @@ STORE_LINK = "https://your-store-link.com"  # Change to your store link
 BASE_API_URL = "http://127.0.0.1:8000/search"
 NUMBER_API_URL = f"{BASE_API_URL}/number?number={{}}&key={API_KEY}"
 AADHAAR_API_URL = f"{BASE_API_URL}/aadhar?aadhar={{}}&key={API_KEY}"
-VEHICLE_INFO_API = "https://shaurya-fuckz.vercel.app/api/indian?type=vehicle_num&term={}"
-FAMILY_API_URL = "http://api.subhxcosmo.in/api?key=toxic&type=id_family&term={}"
+VEHICLE_INFO_API = "https://anon-vehicle-info.vercel.app/veh2num?key=AnonyLomda@2009&rc={}"
+FAMILY_API_URL = "https://anon-family-info.vercel.app/advanced/aadhar?key=AnonyLomda@2009&q={}"
 
 # Default Bot Settings (stored in DB, admin can toggle)
 DEFAULT_SETTINGS = {
@@ -760,38 +760,19 @@ def fetch_vehicle_info_from_api(vehicle_number):
     try:
         api_url = VEHICLE_INFO_API.format(vehicle_number)
         response = requests.get(api_url, timeout=20)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == True:
-                vehicle_data = data.get("data", {})
-                vehicle_info = vehicle_data.get("vehicle_info", {}).get("data", {})
-                mobile_no = vehicle_data.get("mobile_no", "N/A")
-                return {
-                    "status": "success",
-                    "data": {
-                        "reg_no": vehicle_info.get("reg_no", vehicle_number),
-                        "owner_name": vehicle_info.get("owner_name", "N/A"),
-                        "maker": vehicle_info.get("maker", "N/A"),
-                        "maker_modal": vehicle_info.get("maker_modal", "N/A"),
-                        "vehicle_type": vehicle_info.get("vh_class", "N/A"),
-                        "fuel_type": vehicle_info.get("fuel_type", "N/A"),
-                        "regn_dt": vehicle_info.get("regn_dt", "N/A"),
-                        "vehicle_color": vehicle_info.get("vehicle_color", "N/A"),
-                        "chasi_no": vehicle_info.get("chasi_no", "N/A"),
-                        "engine_no": vehicle_info.get("engine_no", "N/A"),
-                        "status": vehicle_info.get("status", "N/A"),
-                        "fitness_upto": vehicle_info.get("fitness_upto", "N/A"),
-                        "insurance_company": vehicle_info.get("insurance_company", "N/A"),
-                        "insurance_upto": vehicle_info.get("insurance_upto", "N/A"),
-                        "rto": vehicle_info.get("rto", "N/A"),
-                        "mobile_no": mobile_no
-                    },
-                    "input": vehicle_number
-                }
-            else:
-                return {"status": "no_data", "message": "No vehicle information found for this registration number."}
+        data = response.json()
+        resp = data.get("response", {})
+        params = resp.get("parameters", {})
+        results = resp.get("data", [])
+        if params.get("success") == True and results:
+            vehicle_info = results[0] if results else {}
+            return {
+                "status": "success",
+                "data": vehicle_info,
+                "input": vehicle_number
+            }
         else:
-            return {"status": "error", "message": "No vehicle information found for this registration number."}
+            return {"status": "no_data", "message": "No vehicle information found for this registration number."}
     except Exception as e:
         print(f"Vehicle API Error for {vehicle_number}: {str(e)}")
         return {"status": "error", "message": "No vehicle information found for this registration number."}
@@ -800,28 +781,26 @@ def fetch_family_info_from_api(aadhaar_number):
     try:
         api_url = FAMILY_API_URL.format(aadhaar_number)
         response = requests.get(api_url, timeout=20)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success") == True:
-                result = data.get("result", {})
-                results_list = result.get("results", [])
-                if results_list and len(results_list) > 0:
-                    family_data = results_list[0]
-                    ration_details = family_data.get("ration_card_details", {})
-                    members = family_data.get("members", [])
-                    return {
-                        "status": "success",
-                        "state_name": ration_details.get("state_name", "N/A"),
-                        "district_name": ration_details.get("district_name", "N/A"),
-                        "ration_card_no": ration_details.get("ration_card_no", "N/A"),
-                        "members": members
-                    }
-                else:
-                    return {"status": "no_data", "message": "No family information found for this Aadhaar number."}
-            else:
-                return {"status": "error", "message": "No family information found for this Aadhaar number."}
+        data = response.json()
+        resp = data.get("response", {})
+        params = resp.get("parameters", {})
+        results = resp.get("data", [])
+        if params.get("success") == True and results:
+            family_data = results[0] if results else {}
+            members = family_data.get("members", [])
+            return {
+                "status": "success",
+                "rcId": family_data.get("rcId", "N/A"),
+                "fpsId": family_data.get("fpsId", "N/A"),
+                "state": family_data.get("state", "N/A"),
+                "district": family_data.get("district", "N/A"),
+                "members": members
+            }
         else:
-            return {"status": "error", "message": "No family information found for this Aadhaar number."}
+            error_msg = "No family information found for this Aadhaar number."
+            if results and isinstance(results, list) and len(results) > 0 and results[0].get("message"):
+                error_msg = results[0].get("message")
+            return {"status": "no_data", "message": error_msg}
     except Exception as e:
         print(f"Family API Error for {aadhaar_number}: {str(e)}")
         return {"status": "error", "message": "No family information found for this Aadhaar number."}
@@ -2594,17 +2573,22 @@ def process_family_info_input(message):
         return
     
     msg = f"👨‍👩‍👧‍👦 *Family Information*\n\n"
-    msg += f"📍 *State*         : `{data.get('state_name', 'N/A')}`\n"
-    msg += f"🏙️ *District*      : `{data.get('district_name', 'N/A')}`\n"
-    msg += f"🪪 *Ration Card*   : `{data.get('ration_card_no', 'N/A')}`\n\n"
+    
+    msg += f"🏤 *State*        : `{data.get('state', 'N/A')}`\n"
+    msg += f"🏙️ *District*     : `{data.get('district', 'N/A')}`\n"
+    msg += f"🪪 *Ration Card*  : `{data.get('rcId', 'N/A')}`\n"
+    msg += f"🏪 *FPS ID*       : `{data.get('fpsId', 'N/A')}`\n\n"
     
     members = data.get('members', [])
     if members:
-        msg += f"👥 *Family Members*\n\n"
-        for member in members:
-            msg += f"🆔 *Member ID*     : `{member.get('member_id', 'N/A')}`\n"
-            msg += f"👤 *Name*          : `{member.get('member_name', 'N/A')}`\n"
-            msg += f"────────────────────\n"
+        msg += f"👥 *Family Members ({len(members)})*\n\n"
+        for i, member in enumerate(members, 1):
+            msg += f"━━━ *Member {i}* ━━━\n"
+            msg += f"👤 *Name*     : `{member.get('memberName', 'N/A')}`\n"
+            msg += f"🆔 *Aadhaar*  : `{member.get('aadhaar', 'N/A')}`\n"
+            head_status = "✅ Yes" if member.get('familyHead') == 'Yes' else "❌ No"
+            msg += f"👑 *Head*     : `{head_status}`\n"
+            msg += "\n"
     else:
         msg += f"👥 *Family Members*\n\n"
         msg += f"`No members found`\n"
@@ -2651,21 +2635,28 @@ def process_vehicle_info_input(message):
     
     vehicle_data = data.get("data", {})
     msg = f"🚗 *Vehicle Information*\n\n"
-    msg += f"🔢 *Registration*   : `{vehicle_data.get('reg_no', query)}`\n"
-    msg += f"👤 *Owner Name*     : `{vehicle_data.get('owner_name', 'N/A')}`\n"
-    msg += f"🏭 *Manufacturer*   : `{vehicle_data.get('maker', 'N/A')}`\n"
-    msg += f"🚙 *Model*          : `{vehicle_data.get('maker_modal', 'N/A')}`\n"
-    msg += f"🏷️ *Vehicle Type*   : `{vehicle_data.get('vehicle_type', 'N/A')}`\n"
-    msg += f"⛽ *Fuel Type*      : `{vehicle_data.get('fuel_type', 'N/A')}`\n"
-    msg += f"🎨 *Color*          : `{vehicle_data.get('vehicle_color', 'N/A')}`\n"
-    msg += f"📅 *Registration*   : `{vehicle_data.get('regn_dt', 'N/A')}`\n\n"
-    msg += f"⚙️ *Technical Details*\n"
-    msg += f"🔩 *Chassis No*     : `{vehicle_data.get('chasi_no', 'N/A')}`\n"
-    msg += f"🔧 *Engine No*      : `{vehicle_data.get('engine_no', 'N/A')}`\n\n"
-    msg += f"🛡️ *Insurance Info*\n"
-    msg += f"🏢 *Insurer*        : `{vehicle_data.get('insurance_company', 'N/A')}`\n"
-    msg += f"📅 *Expiry Date*    : `{vehicle_data.get('insurance_upto', 'N/A')}`\n\n"
-    msg += f"📞 *Contact Number* : `{vehicle_data.get('mobile_no', 'N/A')}`\n"
+    msg += f"🔢 *Registration No* : `{vehicle_data.get('reg', query)}`\n"
+    msg += f"📞 *Mobile Number*   : `{vehicle_data.get('num', 'N/A')}`\n"
+    
+    # Show extra fields if available from API
+    extra_fields = [
+        ("👤", "Owner Name", "owner_name"),
+        ("🏭", "Manufacturer", "maker"),
+        ("🚙", "Model", "maker_modal"),
+        ("🏷️", "Vehicle Type", "vh_class"),
+        ("⛽", "Fuel Type", "fuel_type"),
+        ("🎨", "Color", "vehicle_color"),
+        ("📅", "Reg. Date", "regn_dt"),
+        ("🔩", "Chassis No", "chasi_no"),
+        ("🔧", "Engine No", "engine_no"),
+        ("🏢", "Insurance", "insurance_company"),
+        ("📅", "Insurance Upto", "insurance_upto"),
+        ("🏛️", "RTO", "rto"),
+    ]
+    for emoji, label, key in extra_fields:
+        val = vehicle_data.get(key)
+        if val and val != "N/A":
+            msg += f"{emoji} *{label}* : `{val}`\n"
     
     wrapped_send_message(message.chat.id, msg, parse_mode="Markdown")
     show_menu(message.chat.id)

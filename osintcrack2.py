@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = '8695416122:AAF9VbmCANNid1sisYu_z3UShz9pzuGR4oE'
+BOT_TOKEN = '8903667323:AAHAMIMgDypDLF45TZ9rcmn9NEC629_HGXY'
 ADMIN_USER_ID = 8637412597
 ADMIN_USERNAME = "admin"
 API_KEY = "mysecretkey123"

@@ -2572,72 +2572,60 @@ def show_my_account(message):
 #           SEARCH HANDLERS (WITH CREDIT DEDUCTION)
 # ============================================================
 
-def ask_master_search(message):
-    if check_ban_status(message.from_user.id, message.chat.id):
-        return
+def classify_master_search_input(text):
+    """
+    Smart classifier for Master Search input.
+    Returns:
+      ('mobile', 10-digit-string)
+      ('aadhaar', 12-digit-string)
+      ('ambiguous_12', 12-digit-string)
+      or (None, None)
+    """
+    if not text:
+        return None, None
+    raw = str(text).strip()
+    digits_only = re.sub(r'\D', '', raw)
+    has_plus = raw.startswith('+')
     
-    user_id = message.from_user.id
-    
-    # Restrict Master Search to VIP members, Admin, or Admin-approved users
-    if not is_master_search_allowed(user_id):
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        vip_btn = types.InlineKeyboardButton("💎 Buy VIP Plan", callback_data="show_vip_plans")
-        markup.add(vip_btn)
-        if DEVELOPER_LINK:
-            dev_btn = types.InlineKeyboardButton("💬 Contact Admin / Developer", url=DEVELOPER_LINK)
-            markup.add(dev_btn)
+    # Exactly 10 digits
+    if len(digits_only) == 10:
+        return 'mobile', digits_only
+        
+    # 11 digits starting with 0 (e.g. 09876543210)
+    if len(digits_only) == 11 and digits_only.startswith('0'):
+        return 'mobile', digits_only[1:]
+        
+    # Explicit +91 with 12 digits (e.g. +91 98765 43210)
+    if has_plus and len(digits_only) == 12 and digits_only.startswith('91'):
+        return 'mobile', digits_only[2:]
+        
+    # 12 digits
+    if len(digits_only) == 12:
+        # If does not start with 91, it's 100% Aadhaar (since Indian mobile country code is 91)
+        if not digits_only.startswith('91'):
+            return 'aadhaar', digits_only
             
-        wrapped_send_message(
-            message.chat.id,
-            "🔒 *VIP Feature Only!*\n\n"
-            "⚡ *Master Deep Search* (Mobile ➔ Linked Aadhaar ➔ Family Members) sirf **VIP Members** ya **Admin Approved** users ke liye available hai!\n\n"
-            "✨ *VIP Plan Ke Fayde:*\n"
-            "• ⚡ Unlimited Master Deep Searches (No limits)\n"
-            "• 👨‍👩‍👧‍👦 Auto Complete Chain: Number ➔ Aadhaar ➔ Family\n"
-            "• 🚀 Ultra Fast Server Priority\n\n"
-            "👉 VIP Plan lene ke liye niche button dabayein ya Admin se activate karwayein.",
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-        return
-    
-    if user_id != ADMIN_USER_ID and not has_active_membership(user_id):
-        if not can_search(user_id):
-            show_no_credits_message(message.chat.id)
-            return
-    
-    msg = wrapped_send_message(
-        message.chat.id,
-        "⚡ *Master Deep Search*\n\n"
-        "Ek hi search me automatic sab kuch niklega:\n"
-        "1️⃣ Mobile Number details\n"
-        "2️⃣ Linked Aadhaar details\n"
-        "3️⃣ Family members details\n\n"
-        "📱 Apna *Mobile Number* enter karein (e.g. `9876543210` ya `+91 98765 43210`):",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(msg, process_master_search_input)
+        # Format 4-4-4 (e.g. 9123 4567 8901 or 9123-4567-8901) -> Aadhaar
+        parts = re.split(r'[\s\-]+', raw)
+        if len(parts) == 3 and all(len(p) == 4 for p in parts):
+            return 'aadhaar', digits_only
+            
+        # Explicit +91 or 91 with space or hyphen after country code -> Mobile
+        if raw.startswith('+91') or (len(parts) >= 2 and parts[0] in ['91', '+91']):
+            return 'mobile', digits_only[2:]
+            
+        # Plain 12 digits starting with 91:
+        # Check if 3rd digit is a mobile starting digit (6, 7, 8, 9)
+        if digits_only[2] in ['6', '7', '8', '9']:
+            return 'ambiguous_12', digits_only
+            
+        return 'aadhaar', digits_only
+        
+    return None, None
 
-def process_master_search_input(message):
-    if check_ban_status(message.from_user.id, message.chat.id):
-        return
-    if is_command_or_menu(message):
-        return
-        
-    clean_num = sanitize_mobile_number(message.text)
-    if not clean_num:
-        msg = wrapped_send_message(message.chat.id, "❌ Invalid number! Kripya valid *10-digit* mobile number enter karein (e.g. `9876543210` ya `+91 98765 43210`):", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_master_search_input)
-        return
-        
-    # Deduct credit (admin and VIP membership bypass)
-    if message.from_user.id != ADMIN_USER_ID and not has_active_membership(message.from_user.id):
-        if not deduct_credit(message.from_user.id):
-            show_no_credits_message(message.chat.id)
-            return
-            
-    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
-    
+
+def execute_master_search_from_mobile(message, clean_num):
+    """Execute deep OSINT starting from Mobile Number"""
     # --- STEP 1: Number Search ---
     wrapped_send_message(message.chat.id, "⚡ *Step 1/3:* Mobile number details fetch kar rahe hain... ⏳", parse_mode="Markdown")
     num_data = fetch_number_info_from_api(clean_num)
@@ -2741,6 +2729,190 @@ def process_master_search_input(message):
     time.sleep(0.5)
     wrapped_send_message(message.chat.id, "✅ *Master Search Completed!* 🎉", parse_mode="Markdown")
     show_menu(message.chat.id)
+
+
+def execute_master_search_from_aadhaar(message, clean_adh, pre_adh_data=None):
+    """Execute deep OSINT starting from Aadhaar Number"""
+    # --- STEP 1: Aadhaar Details ---
+    wrapped_send_message(message.chat.id, f"⚡ *Step 1/3:* Aadhaar `{clean_adh}` details fetch kar rahe hain... ⏳", parse_mode="Markdown")
+    adh_data = pre_adh_data if pre_adh_data else fetch_aadhaar_info_from_api(clean_adh)
+    
+    linked_mobiles = []
+    if adh_data.get("status") == "success":
+        adh_msg = f"📄 *Step 1: Aadhaar Details*\n\n"
+        adh_msg += f"🆔 *Aadhaar No*  : `{adh_data.get('aadhaar', clean_adh)}`\n"
+        adh_msg += f"👨 *Name*        : `{adh_data.get('name', 'N/A')}`\n"
+        adh_msg += f"👴 *Father Name* : `{adh_data.get('fname', 'N/A')}`\n"
+        adh_msg += f"🏠 *Address*     : `{adh_data.get('address', 'N/A')}`\n"
+        
+        mobiles = adh_data.get('mobiles', [])
+        if mobiles:
+            adh_msg += f"\n📱 *Linked Mobiles:*\n"
+            for m in mobiles[:5]:
+                m_num = m.get('mobile', 'N/A')
+                if m_num != 'N/A':
+                    clean_m = sanitize_mobile_number(m_num)
+                    if clean_m and clean_m not in linked_mobiles:
+                        linked_mobiles.append(clean_m)
+                adh_msg += f"• `{m_num}`"
+                if m.get('circle') and m.get('circle') != 'N/A':
+                    adh_msg += f" ({m.get('circle')})"
+                adh_msg += "\n"
+        wrapped_send_message(message.chat.id, adh_msg, parse_mode="Markdown")
+    else:
+        wrapped_send_message(message.chat.id, f"⚠️ Aadhaar details: {adh_data.get('message', 'No details found')}")
+        
+    time.sleep(0.5)
+    
+    # --- STEP 2: Family Details ---
+    wrapped_send_message(message.chat.id, f"⚡ *Step 2/3:* Family details fetch kar rahe hain... ⏳", parse_mode="Markdown")
+    fam_data = fetch_family_info_from_api(clean_adh)
+    
+    if fam_data.get("status") == "success":
+        fam_msg = f"👨‍👩‍👧‍👦 *Step 2: Family Information*\n\n"
+        fam_msg += f"🏤 *State*       : `{fam_data.get('state', 'N/A')}`\n"
+        fam_msg += f"🏙️ *District*    : `{fam_data.get('district', 'N/A')}`\n"
+        fam_msg += f"🪪 *Ration Card* : `{fam_data.get('rcId', 'N/A')}`\n"
+        fam_msg += f"🏪 *FPS ID*      : `{fam_data.get('fpsId', 'N/A')}`\n\n"
+        
+        members = fam_data.get('members', [])
+        if members:
+            fam_msg += f"👥 *Family Members ({len(members)})*\n\n"
+            for i, member in enumerate(members, 1):
+                fam_msg += f"━━━ *Member {i}* ━━━\n"
+                fam_msg += f"👤 *Name*    : `{member.get('memberName', 'N/A')}`\n"
+                fam_msg += f"🆔 *Aadhaar* : `{member.get('aadhaar', 'N/A')}`\n"
+                head_status = "✅ Yes" if member.get('familyHead') == 'Yes' else "❌ No"
+                fam_msg += f"👑 *Head*    : `{head_status}`\n\n"
+        else:
+            fam_msg += "`No members found`\n"
+        wrapped_send_message(message.chat.id, fam_msg, parse_mode="Markdown")
+    else:
+        wrapped_send_message(message.chat.id, f"⚠️ Family details: {fam_data.get('message', 'No family records found')}")
+        
+    time.sleep(0.5)
+    
+    # --- STEP 3: Linked Mobile Number Search ---
+    if linked_mobiles:
+        prim_mob = linked_mobiles[0]
+        wrapped_send_message(message.chat.id, f"⚡ *Step 3/3:* Linked Mobile `{prim_mob}` records fetch kar rahe hain... ⏳", parse_mode="Markdown")
+        time.sleep(0.5)
+        num_data = fetch_number_info_from_api(prim_mob)
+        if num_data.get("status") == "success":
+            results = num_data.get("results", [])
+            count = num_data.get("count", 0)
+            summary_msg = f"📱 *Step 3: Linked Mobile Results*\n\n"
+            summary_msg += f"📞 *Mobile Number*: `{prim_mob}`\n"
+            summary_msg += f"📈 *Total Records*: `{count}`\n"
+            wrapped_send_message(message.chat.id, summary_msg, parse_mode="Markdown")
+            
+            for idx, r in enumerate(results[:2], 1):
+                record_msg = f"👤 *Record #{idx}*\n"
+                record_msg += f"📝 *Name*: `{r.get('name', 'N/A')}`\n"
+                record_msg += f"👨 *Father*: `{r.get('fname', 'N/A')}`\n"
+                record_msg += f"🏠 *Address*: `{r.get('address', 'N/A')}`\n"
+                if r.get('alt') and r.get('alt') != 'N/A':
+                    record_msg += f"📞 *Alt Mobile*: `{r.get('alt')}`\n"
+                wrapped_send_message(message.chat.id, record_msg, parse_mode="Markdown")
+                time.sleep(0.3)
+        else:
+            wrapped_send_message(message.chat.id, f"⚠️ Mobile `{prim_mob}` records: {num_data.get('message', 'No records found')}")
+    else:
+        wrapped_send_message(message.chat.id, "ℹ️ *Step 3/3:* Is Aadhaar se koi direct mobile number link nahi mila.", parse_mode="Markdown")
+        
+    time.sleep(0.5)
+    wrapped_send_message(message.chat.id, "✅ *Master Search Completed!* 🎉", parse_mode="Markdown")
+    show_menu(message.chat.id)
+
+
+def ask_master_search(message):
+    if check_ban_status(message.from_user.id, message.chat.id):
+        return
+    
+    user_id = message.from_user.id
+    
+    # Restrict Master Search to VIP members, Admin, or Admin-approved users
+    if not is_master_search_allowed(user_id):
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        vip_btn = types.InlineKeyboardButton("💎 Buy VIP Plan", callback_data="show_vip_plans")
+        markup.add(vip_btn)
+        if DEVELOPER_LINK:
+            dev_btn = types.InlineKeyboardButton("💬 Contact Admin / Developer", url=DEVELOPER_LINK)
+            markup.add(dev_btn)
+            
+        wrapped_send_message(
+            message.chat.id,
+            "🔒 *VIP Feature Only!*\n\n"
+            "⚡ *Master Deep Search* (Mobile ➔ Linked Aadhaar ➔ Family Members) sirf **VIP Members** ya **Admin Approved** users ke liye available hai!\n\n"
+            "✨ *VIP Plan Ke Fayde:*\n"
+            "• ⚡ Unlimited Master Deep Searches (No limits)\n"
+            "• 📱 Mobile ya 🆔 Aadhaar dono se full chain search\n"
+            "• 👨‍👩‍👧‍👦 Auto Complete Chain: Number ➔ Aadhaar ➔ Family\n"
+            "• 🚀 Ultra Fast Server Priority\n\n"
+            "👉 VIP Plan lene ke liye niche button dabayein ya Admin se activate karwayein.",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+        return
+    
+    if user_id != ADMIN_USER_ID and not has_active_membership(user_id):
+        if not can_search(user_id):
+            show_no_credits_message(message.chat.id)
+            return
+    
+    msg = wrapped_send_message(
+        message.chat.id,
+        "⚡ *Master Deep Search*\n\n"
+        "Ek hi search me automatic complete records niklenge:\n"
+        "• 📱 *Mobile Number* dalein ➔ Mobile + Linked Aadhaar + Family\n"
+        "• 🆔 *Aadhaar Number* dalein ➔ Aadhaar + Family + Linked Mobiles\n\n"
+        "👇 Apna *Mobile Number* ya *Aadhaar Number* enter karein:\n"
+        "_(e.g. `9876543210`, `+91 98765 43210`, ya `1234 5678 9012`)_",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(msg, process_master_search_input)
+
+def process_master_search_input(message):
+    if check_ban_status(message.from_user.id, message.chat.id):
+        return
+    if is_command_or_menu(message):
+        return
+        
+    search_type, clean_val = classify_master_search_input(message.text)
+    if not search_type:
+        msg = wrapped_send_message(
+            message.chat.id,
+            "❌ *Invalid Input!*\n\n"
+            "Kripya valid:\n"
+            "• *10-digit Mobile Number* (e.g. `9876543210` ya `+91 98765 43210`)\n"
+            "• ya *12-digit Aadhaar Number* (e.g. `1234 5678 9012` ya `123456789012`)\n\n"
+            "enter karein:",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_master_search_input)
+        return
+        
+    # Deduct credit (admin and VIP membership bypass)
+    if message.from_user.id != ADMIN_USER_ID and not has_active_membership(message.from_user.id):
+        if not deduct_credit(message.from_user.id):
+            show_no_credits_message(message.chat.id)
+            return
+            
+    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
+    
+    if search_type == 'mobile':
+        execute_master_search_from_mobile(message, clean_val)
+    elif search_type == 'aadhaar':
+        execute_master_search_from_aadhaar(message, clean_val)
+    elif search_type == 'ambiguous_12':
+        # Check Aadhaar first
+        adh_data = fetch_aadhaar_info_from_api(clean_val)
+        if adh_data.get("status") == "success":
+            execute_master_search_from_aadhaar(message, clean_val, pre_adh_data=adh_data)
+        else:
+            # Fallback to Mobile
+            mob = clean_val[2:]
+            execute_master_search_from_mobile(message, mob)
 
 def ask_number(message):
     if check_ban_status(message.from_user.id, message.chat.id):

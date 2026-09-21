@@ -1,6 +1,8 @@
 import telebot
 from telebot import types
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 import time
 import sqlite3
 import threading
@@ -62,13 +64,17 @@ DEFAULT_SETTINGS = {
 }
 
 # ============================================================
-#                    DATABASE
+#                    DATABASE (HIGH CONCURRENCY WAL)
 # ============================================================
 
 def get_db():
-    """Get thread-safe database connection"""
-    conn = sqlite3.connect('data.db', check_same_thread=False)
+    """Get thread-safe database connection with WAL mode and 60s busy timeout"""
+    conn = sqlite3.connect('data.db', timeout=60.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 60000;")
+    conn.execute("PRAGMA cache_size = -64000;")
     return conn
 
 def init_db():
@@ -146,12 +152,53 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     
+    # High performance indexes for 10k users
+    c.execute("CREATE INDEX IF NOT EXISTS idx_users_id ON users(user_id);")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_user_credits_id ON user_credits(user_id);")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_redeem_code ON redeem_codes(code);")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payment_status ON payment_requests(status);")
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# Multi-threaded bot worker pool (25 threads for high concurrency)
+bot = telebot.TeleBot(BOT_TOKEN, num_threads=25)
+
+# Shared HTTP connection pool for API queries
+http_session = requests.Session()
+retry_strategy = Retry(
+    total=2,
+    backoff_factor=0.3,
+    status_forcelist=[500, 502, 503, 504],
+)
+adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retry_strategy)
+http_session.mount("http://", adapter)
+http_session.mount("https://", adapter)
+
+# Sliding window rate limiter to protect from spam / DDoS
+class RateLimiter:
+    def __init__(self):
+        self._user_last_action = {}
+        self._lock = threading.Lock()
+        
+    def is_rate_limited(self, user_id, cooldown_seconds=1.0):
+        if user_id == ADMIN_USER_ID:
+            return False
+        now = time.time()
+        with self._lock:
+            last_time = self._user_last_action.get(user_id, 0)
+            if now - last_time < cooldown_seconds:
+                return True
+            self._user_last_action[user_id] = now
+            if len(self._user_last_action) > 20000:
+                cutoff = now - 60
+                self._user_last_action = {k: v for k, v in self._user_last_action.items() if v > cutoff}
+            return False
+
+rate_limiter = RateLimiter()
+
 broadcast_storage = {}
 admin_announcement_data = {}
 
@@ -674,7 +721,7 @@ def wrapped_reply_to(message, text, *args, **kwargs):
 def fetch_number_info_from_api(mobile_number):
     try:
         api_url = NUMBER_API_URL.format(mobile_number)
-        response = requests.get(api_url, timeout=10)
+        response = http_session.get(api_url, timeout=(5, 15))
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "success":
@@ -722,7 +769,7 @@ def fetch_number_info_from_api(mobile_number):
 def fetch_aadhaar_info_from_api(aadhaar_number):
     try:
         api_url = AADHAAR_API_URL.format(aadhaar_number)
-        response = requests.get(api_url, timeout=10)
+        response = http_session.get(api_url, timeout=(5, 15))
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "success":
@@ -759,7 +806,7 @@ def fetch_aadhaar_info_from_api(aadhaar_number):
 def fetch_vehicle_info_from_api(vehicle_number):
     try:
         api_url = VEHICLE_INFO_API.format(vehicle_number)
-        response = requests.get(api_url, timeout=20)
+        response = http_session.get(api_url, timeout=(5, 15))
         data = response.json()
         resp = data.get("response", {})
         params = resp.get("parameters", {})
@@ -780,7 +827,7 @@ def fetch_vehicle_info_from_api(vehicle_number):
 def fetch_family_info_from_api(aadhaar_number):
     try:
         api_url = FAMILY_API_URL.format(aadhaar_number)
-        response = requests.get(api_url, timeout=20)
+        response = http_session.get(api_url, timeout=(5, 15))
         data = response.json()
         resp = data.get("response", {})
         params = resp.get("parameters", {})
@@ -1357,13 +1404,9 @@ admin_input_handler = {}
 
 @bot.message_handler(commands=['start', 'msg', 'ban', 'unban', 'banned', 'admin', 'user', 'give', 'gencode', 'settings', 'payments'])
 def handle_commands(message):
-    # Forward message to admin if not from admin
-    if message.chat.id != ADMIN_USER_ID:
-        try:
-            bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-            bot.send_message(ADMIN_USER_ID, f"User ID: {message.chat.id}")
-        except Exception as e:
-            print(f"Failed to forward message: {e}")
+    user_id = message.from_user.id
+    if rate_limiter.is_rate_limited(user_id, cooldown_seconds=0.8):
+        return
     
     cmd = message.text.split()[0].lower() if message.text else ''
     
@@ -1620,7 +1663,13 @@ def run_broadcast(user_ids, messages_to_send):
     fail_count = 0
     total_users = len(user_ids)
     
-    bot.send_message(ADMIN_USER_ID, f"🚀 Broadcast Started to {total_users} users!")
+    try:
+        status_msg = bot.send_message(ADMIN_USER_ID, f"🚀 *Broadcast Started* to {total_users} users!", parse_mode="Markdown")
+        status_msg_id = status_msg.message_id
+    except Exception:
+        status_msg_id = None
+    
+    last_update_time = time.time()
     
     for index, user_id in enumerate(user_ids, 1):
         user_success = True
@@ -1634,6 +1683,10 @@ def run_broadcast(user_ids, messages_to_send):
                         delete_user(user_id)
                         user_success = False
                         break
+                    elif "retry after" in err_str:
+                        time.sleep(2)
+                        user_success = False
+                        break
                     else:
                         user_success = False
                         break
@@ -1645,15 +1698,29 @@ def run_broadcast(user_ids, messages_to_send):
         except Exception:
             fail_count += 1
         
-        if index % 20 == 0 or index == total_users:
+        # Edit progress message every 5 seconds to avoid rate limits
+        now = time.time()
+        if (now - last_update_time >= 5.0 or index == total_users) and status_msg_id:
             try:
                 progress = (index / total_users) * 100
-                bot.send_message(ADMIN_USER_ID, f"📊 Progress: {progress:.1f}% ({index}/{total_users})\n✅ Success: {success_count}\n❌ Failed/Cleaned: {fail_count}")
-            except: pass
+                bot.edit_message_text(
+                    f"📊 *Broadcast Progress*: {progress:.1f}%\n"
+                    f"👥 Done: {index}/{total_users}\n"
+                    f"✅ Success: {success_count}\n"
+                    f"❌ Failed: {fail_count}",
+                    ADMIN_USER_ID, status_msg_id, parse_mode="Markdown"
+                )
+                last_update_time = now
+            except Exception:
+                pass
         
-        time.sleep(0.05)
+        # 0.04s sleep = ~25 msgs/sec max (strictly adhering to Telegram 30 msg/sec global limit)
+        time.sleep(0.04)
     
-    bot.send_message(ADMIN_USER_ID, f"📊 *Broadcast Completed!*\n\n✅ Success: {success_count}\n❌ Failed/Cleaned: {fail_count}\n👥 Total: {total_users}", parse_mode="Markdown")
+    try:
+        bot.send_message(ADMIN_USER_ID, f"📊 *Broadcast Completed!*\n\n✅ Success: {success_count}\n❌ Failed/Cleaned: {fail_count}\n👥 Total: {total_users}", parse_mode="Markdown")
+    except Exception:
+        pass
     admin_announcement_data[ADMIN_USER_ID] = []
 
 # ============================================================
@@ -1665,6 +1732,15 @@ def handle_all_callbacks(call):
     chat_id = call.message.chat.id
     user_id = call.from_user.id
     data = call.data
+    
+    # Anti-spam rate limiting (1.0s cooldown per user)
+    if rate_limiter.is_rate_limited(user_id, cooldown_seconds=1.0):
+        try:
+            bot.answer_callback_query(call.id, "⏳ Please wait a moment!", show_alert=False)
+        except Exception:
+            pass
+        return
+    
     print(f"👉 [CALLBACK] Received: '{data}' from User ID: {user_id} (Admin: {ADMIN_USER_ID})")
     
     # --- Force Join Check ---
@@ -2292,20 +2368,17 @@ def process_redeem_code_input(message):
     "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer", "⚙️ Admin Panel"
 ])
 def handle_menu_buttons(message):
-    if check_ban_status(message.from_user.id, message.chat.id):
+    user_id = message.from_user.id
+    if rate_limiter.is_rate_limited(user_id, cooldown_seconds=0.8):
+        return
+        
+    if check_ban_status(user_id, message.chat.id):
         return
     
     # Force join check
-    if not check_force_join(message.from_user.id):
+    if not check_force_join(user_id):
         send_force_join_message(message.chat.id)
         return
-    
-    if message.chat.id != ADMIN_USER_ID:
-        try:
-            bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-            bot.send_message(ADMIN_USER_ID, f"User ID: {message.chat.id}")
-        except Exception as e:
-            print(f"Failed to forward message: {e}")
     
     if message.text == "🔢 Num Info":
         ask_number(message)
@@ -2387,10 +2460,6 @@ def ask_number(message):
 def process_number_input(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
-    
-    if message.chat.id != ADMIN_USER_ID:
-        try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-        except: pass
     
     if is_command_or_menu(message):
         return
@@ -2484,10 +2553,6 @@ def ask_aadhaar_number(message):
 def process_aadhaar_info_input(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
-    
-    if message.chat.id != ADMIN_USER_ID:
-        try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-        except: pass
         
     if is_command_or_menu(message):
         return
@@ -2551,9 +2616,6 @@ def ask_family_info(message):
 def process_family_info_input(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
-    if message.chat.id != ADMIN_USER_ID:
-        try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-        except: pass
     if is_command_or_menu(message):
         return
         
@@ -2616,9 +2678,6 @@ def ask_vehicle_info(message):
 def process_vehicle_info_input(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
-    if message.chat.id != ADMIN_USER_ID:
-        try: bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-        except: pass
     if is_command_or_menu(message):
         return
     
@@ -2760,11 +2819,9 @@ def show_banned_users(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    if message.chat.id != ADMIN_USER_ID:
-        try:
-            bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
-            bot.send_message(ADMIN_USER_ID, f"User ID: {message.chat.id}")
-        except: pass
+    user_id = message.from_user.id
+    if rate_limiter.is_rate_limited(user_id, cooldown_seconds=0.8):
+        return
     
     if check_ban_status(message.from_user.id, message.chat.id):
         return

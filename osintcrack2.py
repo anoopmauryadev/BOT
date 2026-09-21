@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = '8903667323:AAHAMIMgDypDLF45TZ9rcmn9NEC629_HGXY'
+BOT_TOKEN = '8695416122:AAF9VbmCANNid1sisYu_z3UShz9pzuGR4oE'
 ADMIN_USER_ID = 8637412597
 ADMIN_USERNAME = "admin"
 API_KEY = "mysecretkey123"
@@ -150,6 +150,11 @@ def init_db():
     
     try:
         c.execute('ALTER TABLE redeem_codes ADD COLUMN batch_id TEXT')
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        c.execute('ALTER TABLE user_credits ADD COLUMN master_search_access INTEGER DEFAULT 0')
     except sqlite3.OperationalError:
         pass
     
@@ -470,6 +475,31 @@ def get_vip_users_count():
     result = c.fetchone()
     conn.close()
     return result['cnt'] if result else 0
+
+def is_master_search_allowed(user_id):
+    """Check if user has access to Master Search (Admin, VIP member, or specifically granted by admin)"""
+    if user_id == ADMIN_USER_ID:
+        return True
+    if has_active_membership(user_id):
+        return True
+    user_info = get_user_credits(user_id)
+    if user_info:
+        try:
+            if user_info['master_search_access'] == 1:
+                return True
+        except (IndexError, KeyError):
+            pass
+    return False
+
+def set_master_search_access(user_id, status: bool):
+    """Grant or revoke Master Search access for a user"""
+    ensure_user_credits(user_id)
+    val = 1 if status else 0
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('UPDATE user_credits SET master_search_access = ? WHERE user_id = ?', (val, user_id))
+    conn.commit()
+    conn.close()
 
 # ============================================================
 #                 PAYMENT FUNCTIONS
@@ -1399,6 +1429,17 @@ def show_user_details_admin(chat_id, target_user_id):
             msg += f"📅 Expiry: {user_credits_info['membership_expiry']}\n"
         msg += f"🔍 Total Searches: {user_credits_info['total_searches']}\n"
     
+    # Check Master Search custom access
+    has_custom_master = False
+    if user_credits_info:
+        try:
+            has_custom_master = (user_credits_info['master_search_access'] == 1)
+        except (IndexError, KeyError):
+            pass
+    master_allowed = has_membership or has_custom_master or (target_user_id == ADMIN_USER_ID)
+    master_status_str = "Active (VIP) 💎" if has_membership else ("Granted (Custom) ✅" if has_custom_master else "Disabled ❌")
+    msg += f"⚡ Master Search: *{master_status_str}*\n"
+    
     msg += f"🚫 Banned: *{'Yes ❌' if is_banned else 'No ✅'}*\n"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1411,11 +1452,15 @@ def show_user_details_admin(chat_id, target_user_id):
     else:
         ban_btn = types.InlineKeyboardButton("🚫 Ban", callback_data=f"admin_ban_{target_user_id}")
     
+    master_btn_text = "⚡ Revoke Master Search" if has_custom_master else "⚡ Allow Master Search"
+    master_btn = types.InlineKeyboardButton(master_btn_text, callback_data=f"admin_toggle_master_{target_user_id}")
+    
     back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="admin_back")
     remove_credits_btn = types.InlineKeyboardButton("➖ Remove Credits", callback_data=f"admin_remove_credits_{target_user_id}")
     
     markup.add(credits_btn, membership_btn)
     markup.add(remove_credits_btn, ban_btn)
+    markup.add(master_btn)
     markup.add(back_btn)
     
     bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=markup)
@@ -1427,7 +1472,7 @@ admin_input_handler = {}
 #              BOT COMMAND HANDLERS
 # ============================================================
 
-@bot.message_handler(commands=['start', 'msg', 'ban', 'unban', 'banned', 'admin', 'user', 'give', 'gencode', 'settings', 'payments'])
+@bot.message_handler(commands=['start', 'msg', 'ban', 'unban', 'banned', 'admin', 'user', 'give', 'gencode', 'settings', 'payments', 'allowmaster', 'revokemaster'])
 def handle_commands(message):
     user_id = message.from_user.id
     if rate_limiter.is_rate_limited(user_id, cooldown_seconds=0.8):
@@ -1457,6 +1502,10 @@ def handle_commands(message):
         settings_command(message)
     elif cmd == '/payments':
         payments_command(message)
+    elif cmd == '/allowmaster':
+        handle_allow_master(message, True)
+    elif cmd == '/revokemaster':
+        handle_allow_master(message, False)
 
 # ============================================================
 #              /start HANDLER (WITH FORCE JOIN + CREDITS)
@@ -1569,6 +1618,31 @@ def give_command(message):
             bot.reply_to(message, "❌ Use `credits` or `membership`.", parse_mode="Markdown")
     except ValueError:
         bot.reply_to(message, "❌ Invalid values.")
+
+def handle_allow_master(message, grant=True):
+    """Admin: /allowmaster <user_id> or /revokemaster <user_id>"""
+    if message.from_user.id != ADMIN_USER_ID:
+        wrapped_reply_to(message, "❌ Unauthorized.")
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        action_name = "allowmaster" if grant else "revokemaster"
+        bot.reply_to(message, f"Usage:\n`/{action_name} <user_id>`", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(parts[1].strip())
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid user ID. Sirf digits dalein.", parse_mode="Markdown")
+        return
+        
+    set_master_search_access(target_id, grant)
+    action_str = "GRANTED ✅" if grant else "REVOKED ❌"
+    bot.reply_to(message, f"⚡ Master Search access for user `{target_id}`: *{action_str}*", parse_mode="Markdown")
+    if grant:
+        try:
+            bot.send_message(target_id, "⚡ *Master Deep Search Activated!*\n\nAdmin ne aapke account ke liye Master Deep Search (Number ➔ Aadhaar ➔ Family) ka access on kar diya hai! 🎉", parse_mode="Markdown")
+        except:
+            pass
 
 def gencode_command(message):
     """Admin: /gencode free credits <amount> [qty] or /gencode paid credits <amount> [qty]"""
@@ -1991,8 +2065,11 @@ def handle_all_callbacks(call):
                         "`/user <user_id>`\n\n"
                         "Credits dene ke liye:\n"
                         "`/give <user_id> credits <amount>`\n\n"
-                        "Membership dene ke liye:\n"
-                        "`/give <user_id> membership <days>`",
+                        "Membership (VIP) dene ke liye:\n"
+                        "`/give <user_id> membership <days>`\n\n"
+                        "⚡ Master Search access toggle karne ke liye:\n"
+                        "`/allowmaster <user_id>`\n"
+                        "`/revokemaster <user_id>`",
                         parse_mode="Markdown")
         return
         
@@ -2239,6 +2316,31 @@ def handle_all_callbacks(call):
             pass
         return
     
+    if data.startswith("admin_toggle_master_"):
+        if user_id != ADMIN_USER_ID:
+            bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
+            return
+        target_id = int(data.replace("admin_toggle_master_", ""))
+        u_info = get_user_credits(target_id)
+        current_status = False
+        if u_info:
+            try:
+                current_status = (u_info['master_search_access'] == 1)
+            except (IndexError, KeyError):
+                pass
+        new_status = not current_status
+        set_master_search_access(target_id, new_status)
+        status_txt = "GRANTED ✅" if new_status else "REVOKED ❌"
+        bot.answer_callback_query(call.id, f"Master Search {status_txt}")
+        bot.send_message(chat_id, f"⚡ Master Search access for user `{target_id}`: *{status_txt}*", parse_mode="Markdown")
+        if new_status:
+            try:
+                bot.send_message(target_id, "⚡ *Master Deep Search Activated!*\n\nAdmin ne aapke account ke liye Master Deep Search (Number ➔ Aadhaar ➔ Family) ka access on kar diya hai! 🎉", parse_mode="Markdown")
+            except:
+                pass
+        show_user_details_admin(chat_id, target_id)
+        return
+    
     if data.startswith("admin_ban_"):
         if user_id != ADMIN_USER_ID:
             bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
@@ -2454,16 +2556,15 @@ def show_my_account(message):
         msg += f"💰 *Premium Credits:* {credits}\n"
         msg += f"💎 *Status:* Free User\n"
     
+    master_access = is_master_search_allowed(user_id)
+    msg += f"⚡ *Master Search:* {'Enabled ✅' if master_access else 'Locked (VIP Only) 🔒'}\n"
     msg += f"\n🔍 *Total Searches:* {total_searches}\n"
     msg += f"━━━━━━━━━━━━━━━━━━━━\n"
     
-    if not has_vip:
-        msg += f"\n💡 Credits khatam? VIP Plan lo! → 💎 VIP Plans"
-    
-    markup = types.InlineKeyboardMarkup()
-    if not has_vip:
-        vip_btn = types.InlineKeyboardButton("💎 Get VIP", callback_data="show_vip_plans")
-        markup.add(vip_btn)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    vip_btn = types.InlineKeyboardButton("💎 Buy VIP / Credits", callback_data="show_vip_plans")
+    redeem_btn = types.InlineKeyboardButton("🎟️ Redeem Code", callback_data="plan_redeem")
+    markup.add(vip_btn, redeem_btn)
     
     wrapped_send_message(message.chat.id, msg, parse_mode="Markdown", reply_markup=markup)
 
@@ -2475,8 +2576,33 @@ def ask_master_search(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
     
-    if message.from_user.id != ADMIN_USER_ID:
-        if not can_search(message.from_user.id):
+    user_id = message.from_user.id
+    
+    # Restrict Master Search to VIP members, Admin, or Admin-approved users
+    if not is_master_search_allowed(user_id):
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        vip_btn = types.InlineKeyboardButton("💎 Buy VIP Plan", callback_data="show_vip_plans")
+        markup.add(vip_btn)
+        if DEVELOPER_LINK:
+            dev_btn = types.InlineKeyboardButton("💬 Contact Admin / Developer", url=DEVELOPER_LINK)
+            markup.add(dev_btn)
+            
+        wrapped_send_message(
+            message.chat.id,
+            "🔒 *VIP Feature Only!*\n\n"
+            "⚡ *Master Deep Search* (Mobile ➔ Linked Aadhaar ➔ Family Members) sirf **VIP Members** ya **Admin Approved** users ke liye available hai!\n\n"
+            "✨ *VIP Plan Ke Fayde:*\n"
+            "• ⚡ Unlimited Master Deep Searches (No limits)\n"
+            "• 👨‍👩‍👧‍👦 Auto Complete Chain: Number ➔ Aadhaar ➔ Family\n"
+            "• 🚀 Ultra Fast Server Priority\n\n"
+            "👉 VIP Plan lene ke liye niche button dabayein ya Admin se activate karwayein.",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+        return
+    
+    if user_id != ADMIN_USER_ID and not has_active_membership(user_id):
+        if not can_search(user_id):
             show_no_credits_message(message.chat.id)
             return
     
@@ -2504,8 +2630,8 @@ def process_master_search_input(message):
         bot.register_next_step_handler(msg, process_master_search_input)
         return
         
-    # Deduct credit (admin bypasses)
-    if message.from_user.id != ADMIN_USER_ID:
+    # Deduct credit (admin and VIP membership bypass)
+    if message.from_user.id != ADMIN_USER_ID and not has_active_membership(message.from_user.id):
         if not deduct_credit(message.from_user.id):
             show_no_credits_message(message.chat.id)
             return
@@ -2517,7 +2643,7 @@ def process_master_search_input(message):
     num_data = fetch_number_info_from_api(clean_num)
     
     if num_data.get("status") != "success":
-        if message.from_user.id != ADMIN_USER_ID:
+        if message.from_user.id != ADMIN_USER_ID and not has_active_membership(message.from_user.id):
             add_credits(message.from_user.id, 1)
         wrapped_send_message(message.chat.id, f"❌ {num_data.get('message', 'No data found for this number')}")
         show_menu(message.chat.id)

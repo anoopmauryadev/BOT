@@ -345,6 +345,7 @@ def ensure_user_credits(user_id):
     conn = get_db()
     try:
         c = conn.cursor()
+        c.execute('INSERT OR IGNORE INTO users (user_id, first_name) VALUES (?, ?)', (user_id, f"User_{user_id}"))
         c.execute('INSERT OR IGNORE INTO user_credits (user_id, credits, free_credits_given) VALUES (?, 0, 0)', (user_id,))
         
         # Check daily free credit
@@ -1404,7 +1405,7 @@ def show_user_details_admin(chat_id, target_user_id):
     user_info = c.fetchone()
     conn.close()
     
-    if not user_info:
+    if not user_info and not user_credits_info:
         bot.send_message(chat_id, f"❌ User `{target_user_id}` not found in database.", parse_mode="Markdown")
         return
     
@@ -1412,15 +1413,16 @@ def show_user_details_admin(chat_id, target_user_id):
     has_membership = has_active_membership(target_user_id)
     
     # Escape markdown special chars in user fields
-    safe_first = (user_info['first_name'] or 'N/A').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-    safe_last = (user_info['last_name'] or '').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-    safe_username = (user_info['username'] or 'N/A').replace('_', '\\_')
+    safe_first = ((user_info['first_name'] if user_info else None) or f'User_{target_user_id}').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+    safe_last = ((user_info['last_name'] if user_info else None) or '').replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+    safe_username = ((user_info['username'] if user_info else None) or 'N/A').replace('_', '\\_')
+    date_joined = (user_info['date_joined'] if user_info else None) or 'N/A'
     
     msg = f"👤 *User Details*\n\n"
     msg += f"🆔 ID: `{target_user_id}`\n"
     msg += f"👤 Name: {safe_first} {safe_last}\n"
     msg += f"📛 Username: @{safe_username}\n"
-    msg += f"📅 Joined: {user_info['date_joined']}\n\n"
+    msg += f"📅 Joined: {date_joined}\n\n"
     
     if user_credits_info:
         msg += f"💰 Credits: *{user_credits_info['credits']}*\n"

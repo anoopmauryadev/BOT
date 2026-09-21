@@ -1665,6 +1665,7 @@ def handle_all_callbacks(call):
     chat_id = call.message.chat.id
     user_id = call.from_user.id
     data = call.data
+    print(f"👉 [CALLBACK] Received: '{data}' from User ID: {user_id} (Admin: {ADMIN_USER_ID})")
     
     # --- Force Join Check ---
     if data == "check_force_join":
@@ -2173,6 +2174,12 @@ def handle_all_callbacks(call):
         except:
             pass
         return
+    
+    # Fallback to stop loading spinner if no callback matched
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 def process_admin_config_input(message):
     """Process admin config input"""

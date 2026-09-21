@@ -2795,11 +2795,14 @@ if __name__ == "__main__":
     print(f"🛒 Store: {'ON' if is_setting_on('buy_from_store_enabled') else 'OFF'}")
     print(f"🎟️ Redeem: {'ON' if is_setting_on('redeem_code_enabled') else 'OFF'}")
     
-    bot.remove_webhook()
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Webhook cleanup error: {e}")
     
     while True:
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
+            bot.polling(none_stop=True, interval=0, timeout=20, allowed_updates=telebot.util.update_types)
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(5)

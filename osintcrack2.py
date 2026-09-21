@@ -3,6 +3,7 @@ from telebot import types
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+import re
 import time
 import sqlite3
 import threading
@@ -664,6 +665,28 @@ def send_force_join_message(chat_id):
 # ============================================================
 
 
+def sanitize_mobile_number(text):
+    """Clean mobile number: strip spaces, hyphens, +91, leading 0, etc."""
+    if not text:
+        return None
+    clean = re.sub(r'[\s\-\(\)\+]', '', str(text).strip())
+    if len(clean) == 12 and clean.startswith("91"):
+        clean = clean[2:]
+    elif len(clean) == 11 and clean.startswith("0"):
+        clean = clean[1:]
+    if len(clean) == 10 and clean.isdigit():
+        return clean
+    return None
+
+def sanitize_aadhaar_number(text):
+    """Clean Aadhaar number: strip spaces and hyphens, ensure 12 digits"""
+    if not text:
+        return None
+    clean = re.sub(r'[\s\-\(\)]', '', str(text).strip())
+    if len(clean) == 12 and clean.isdigit():
+        return clean
+    return None
+
 def is_command_or_menu(message):
     if not message.text:
         return False
@@ -672,7 +695,7 @@ def is_command_or_menu(message):
         return True
     
     menu_buttons = [
-        "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
+        "⚡ Master Search", "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
         "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer", "⚙️ Admin Panel"
     ]
     if message.text in menu_buttons:
@@ -859,6 +882,7 @@ def fetch_family_info_from_api(aadhaar_number):
 def show_menu(chat_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     
+    master_btn = types.KeyboardButton("⚡ Master Search")
     num_btn = types.KeyboardButton("🔢 Num Info")
     adhar_btn = types.KeyboardButton("🆔 Adhar Info")
     family_btn = types.KeyboardButton("👨‍👩‍👧‍👦 Family Info")
@@ -867,6 +891,7 @@ def show_menu(chat_id):
     account_btn = types.KeyboardButton("👤 My Account")
     dev_btn = types.KeyboardButton("💬 Chat with Developer")
     
+    markup.add(master_btn)
     markup.add(num_btn, adhar_btn)
     markup.add(family_btn, vehicle_info_btn)
     markup.add(vip_btn, account_btn)
@@ -2364,7 +2389,7 @@ def process_redeem_code_input(message):
 # ============================================================
 
 @bot.message_handler(func=lambda message: message.text in [
-    "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
+    "⚡ Master Search", "🔢 Num Info", "🆔 Adhar Info", "👨‍👩‍👧‍👦 Family Info", "🚗 Vehicle Info", 
     "💎 VIP Plans", "👤 My Account", "💬 Chat with Developer", "⚙️ Admin Panel"
 ])
 def handle_menu_buttons(message):
@@ -2380,7 +2405,9 @@ def handle_menu_buttons(message):
         send_force_join_message(message.chat.id)
         return
     
-    if message.text == "🔢 Num Info":
+    if message.text == "⚡ Master Search":
+        ask_master_search(message)
+    elif message.text == "🔢 Num Info":
         ask_number(message)
     elif message.text == "🆔 Adhar Info":
         ask_aadhaar_number(message)
@@ -2444,6 +2471,151 @@ def show_my_account(message):
 #           SEARCH HANDLERS (WITH CREDIT DEDUCTION)
 # ============================================================
 
+def ask_master_search(message):
+    if check_ban_status(message.from_user.id, message.chat.id):
+        return
+    
+    if message.from_user.id != ADMIN_USER_ID:
+        if not can_search(message.from_user.id):
+            show_no_credits_message(message.chat.id)
+            return
+    
+    msg = wrapped_send_message(
+        message.chat.id,
+        "⚡ *Master Deep Search*\n\n"
+        "Ek hi search me automatic sab kuch niklega:\n"
+        "1️⃣ Mobile Number details\n"
+        "2️⃣ Linked Aadhaar details\n"
+        "3️⃣ Family members details\n\n"
+        "📱 Apna *Mobile Number* enter karein (e.g. `9876543210` ya `+91 98765 43210`):",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(msg, process_master_search_input)
+
+def process_master_search_input(message):
+    if check_ban_status(message.from_user.id, message.chat.id):
+        return
+    if is_command_or_menu(message):
+        return
+        
+    clean_num = sanitize_mobile_number(message.text)
+    if not clean_num:
+        msg = wrapped_send_message(message.chat.id, "❌ Invalid number! Kripya valid *10-digit* mobile number enter karein (e.g. `9876543210` ya `+91 98765 43210`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_master_search_input)
+        return
+        
+    # Deduct credit (admin bypasses)
+    if message.from_user.id != ADMIN_USER_ID:
+        if not deduct_credit(message.from_user.id):
+            show_no_credits_message(message.chat.id)
+            return
+            
+    save_user(message.from_user.id, message.from_user.username, message.from_user.first_name, message.from_user.last_name)
+    
+    # --- STEP 1: Number Search ---
+    wrapped_send_message(message.chat.id, "⚡ *Step 1/3:* Mobile number details fetch kar rahe hain... ⏳", parse_mode="Markdown")
+    num_data = fetch_number_info_from_api(clean_num)
+    
+    if num_data.get("status") != "success":
+        if message.from_user.id != ADMIN_USER_ID:
+            add_credits(message.from_user.id, 1)
+        wrapped_send_message(message.chat.id, f"❌ {num_data.get('message', 'No data found for this number')}")
+        show_menu(message.chat.id)
+        return
+        
+    results = num_data.get("results", [])
+    count = num_data.get("count", 0)
+    
+    summary_msg = f"📊 *Step 1: Number Search Results*\n\n"
+    summary_msg += f"📱 *Mobile Number*: `{clean_num}`\n"
+    summary_msg += f"📈 *Total Records*: `{count}`\n"
+    wrapped_send_message(message.chat.id, summary_msg, parse_mode="Markdown")
+    
+    for idx, r in enumerate(results[:3], 1):
+        record_msg = f"👤 *Record #{idx}*\n"
+        record_msg += f"📝 *Name*: `{r.get('name', 'N/A')}`\n"
+        record_msg += f"👨 *Father*: `{r.get('fname', 'N/A')}`\n"
+        record_msg += f"🆔 *Aadhaar*: `{r.get('aadhaar_id', 'N/A')}`\n"
+        record_msg += f"🏠 *Address*: `{r.get('address', 'N/A')}`\n"
+        if r.get('alt') and r.get('alt') != 'N/A':
+            record_msg += f"📞 *Alt Mobile*: `{r.get('alt')}`\n"
+        if r.get('circle') and r.get('circle') != 'N/A':
+            record_msg += f"📍 *Circle*: `{r.get('circle')}`\n"
+        wrapped_send_message(message.chat.id, record_msg, parse_mode="Markdown")
+        time.sleep(0.3)
+        
+    # Extract unique 12-digit Aadhaar numbers
+    seen_aadhaars = set()
+    aadhaar_list = []
+    for r in results:
+        adh_raw = r.get("aadhaar_id") or r.get("record_id")
+        adh = sanitize_aadhaar_number(adh_raw)
+        if adh and adh not in seen_aadhaars:
+            seen_aadhaars.add(adh)
+            aadhaar_list.append(adh)
+            
+    if not aadhaar_list:
+        wrapped_send_message(message.chat.id, "ℹ️ Is number se koi linked Aadhaar nahi mila. Master search samapt.", parse_mode="Markdown")
+        show_menu(message.chat.id)
+        return
+        
+    # --- STEP 2: Aadhaar Details ---
+    primary_aadhaar = aadhaar_list[0]
+    wrapped_send_message(message.chat.id, f"⚡ *Step 2/3:* Linked Aadhaar `{primary_aadhaar}` details fetch kar rahe hain... ⏳", parse_mode="Markdown")
+    time.sleep(0.5)
+    
+    adh_data = fetch_aadhaar_info_from_api(primary_aadhaar)
+    if adh_data.get("status") == "success":
+        adh_msg = f"📄 *Step 2: Aadhaar Details*\n\n"
+        adh_msg += f"🆔 *Aadhaar No*  : `{adh_data.get('aadhaar', primary_aadhaar)}`\n"
+        adh_msg += f"👨 *Name*        : `{adh_data.get('name', 'N/A')}`\n"
+        adh_msg += f"👴 *Father Name* : `{adh_data.get('fname', 'N/A')}`\n"
+        adh_msg += f"🏠 *Address*     : `{adh_data.get('address', 'N/A')}`\n"
+        
+        mobiles = adh_data.get('mobiles', [])
+        if mobiles:
+            adh_msg += f"\n📱 *Other Associated Mobiles:*\n"
+            for m in mobiles[:3]:
+                adh_msg += f"• `{m.get('mobile', 'N/A')}`"
+                if m.get('circle') and m.get('circle') != 'N/A':
+                    adh_msg += f" ({m.get('circle')})"
+                adh_msg += "\n"
+        wrapped_send_message(message.chat.id, adh_msg, parse_mode="Markdown")
+    else:
+        wrapped_send_message(message.chat.id, f"⚠️ Aadhaar details: {adh_data.get('message', 'No details found')}")
+        
+    time.sleep(0.5)
+    
+    # --- STEP 3: Family Details ---
+    wrapped_send_message(message.chat.id, f"⚡ *Step 3/3:* Family details fetch kar rahe hain... ⏳", parse_mode="Markdown")
+    fam_data = fetch_family_info_from_api(primary_aadhaar)
+    
+    if fam_data.get("status") == "success":
+        fam_msg = f"👨‍👩‍👧‍👦 *Step 3: Family Information*\n\n"
+        fam_msg += f"🏤 *State*       : `{fam_data.get('state', 'N/A')}`\n"
+        fam_msg += f"🏙️ *District*    : `{fam_data.get('district', 'N/A')}`\n"
+        fam_msg += f"🪪 *Ration Card* : `{fam_data.get('rcId', 'N/A')}`\n"
+        fam_msg += f"🏪 *FPS ID*      : `{fam_data.get('fpsId', 'N/A')}`\n\n"
+        
+        members = fam_data.get('members', [])
+        if members:
+            fam_msg += f"👥 *Family Members ({len(members)})*\n\n"
+            for i, member in enumerate(members, 1):
+                fam_msg += f"━━━ *Member {i}* ━━━\n"
+                fam_msg += f"👤 *Name*    : `{member.get('memberName', 'N/A')}`\n"
+                fam_msg += f"🆔 *Aadhaar* : `{member.get('aadhaar', 'N/A')}`\n"
+                head_status = "✅ Yes" if member.get('familyHead') == 'Yes' else "❌ No"
+                fam_msg += f"👑 *Head*    : `{head_status}`\n\n"
+        else:
+            fam_msg += "`No members found`\n"
+        wrapped_send_message(message.chat.id, fam_msg, parse_mode="Markdown")
+    else:
+        wrapped_send_message(message.chat.id, f"⚠️ Family details: {fam_data.get('message', 'No family records found')}")
+        
+    time.sleep(0.5)
+    wrapped_send_message(message.chat.id, "✅ *Master Search Completed!* 🎉", parse_mode="Markdown")
+    show_menu(message.chat.id)
+
 def ask_number(message):
     if check_ban_status(message.from_user.id, message.chat.id):
         return
@@ -2454,7 +2626,7 @@ def ask_number(message):
             show_no_credits_message(message.chat.id)
             return
     
-    msg = wrapped_send_message(message.chat.id, "📱 Please enter a *10-digit* mobile number:", parse_mode="Markdown")
+    msg = wrapped_send_message(message.chat.id, "📱 Please enter a *10-digit* mobile number (e.g. `9876543210` ya `+91 98765 43210`):", parse_mode="Markdown")
     bot.register_next_step_handler(msg, process_number_input)
 
 def process_number_input(message):
@@ -2464,11 +2636,13 @@ def process_number_input(message):
     if is_command_or_menu(message):
         return
         
-    query = message.text.replace(" ", "") if message.text else ""
-    if not (query and query.isdigit() and len(query) == 10):
-        msg = wrapped_send_message(message.chat.id, "❌ Invalid number! Please enter a *10-digit* mobile number:", parse_mode="Markdown")
+    clean_num = sanitize_mobile_number(message.text)
+    if not clean_num:
+        msg = wrapped_send_message(message.chat.id, "❌ Invalid number! Please enter a valid *10-digit* mobile number (e.g. `9876543210` ya `+91 98765 43210`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_number_input)
         return
+        
+    query = clean_num
     
     # Deduct credit (admin bypasses)
     if message.from_user.id != ADMIN_USER_ID:
@@ -2557,11 +2731,13 @@ def process_aadhaar_info_input(message):
     if is_command_or_menu(message):
         return
         
-    query = message.text.replace(" ", "") if message.text else ""
-    if not query:
-        msg = wrapped_send_message(message.chat.id, "❌ Please enter a valid Aadhaar number:", parse_mode="Markdown")
+    clean_adh = sanitize_aadhaar_number(message.text)
+    if not clean_adh:
+        msg = wrapped_send_message(message.chat.id, "❌ Kripya valid *12-digit* Aadhaar number enter karein:", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_aadhaar_info_input)
         return
+        
+    query = clean_adh
     
     if message.from_user.id != ADMIN_USER_ID:
         if not deduct_credit(message.from_user.id):
@@ -2830,9 +3006,10 @@ def handle_all_messages(message):
         send_force_join_message(message.chat.id)
         return
     
-    # Check if user directly sent a 10-digit number
-    query = message.text.replace(" ", "") if message.text else ""
-    if query and query.isdigit() and len(query) == 10:
+    # Check if user directly sent a mobile number (handles +91, spaces, leading 0, etc.)
+    clean_num = sanitize_mobile_number(message.text)
+    if clean_num:
+        message.text = clean_num
         process_number_input(message)
         return
     

@@ -2788,6 +2788,8 @@ if __name__ == "__main__":
     print(f"🛒 Store: {'ON' if is_setting_on('buy_from_store_enabled') else 'OFF'}")
     print(f"🎟️ Redeem: {'ON' if is_setting_on('redeem_code_enabled') else 'OFF'}")
     
+    bot.remove_webhook()
+    
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=20)

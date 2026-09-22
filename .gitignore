@@ -1,1 +1,31 @@
-/__pycache__data.db
+# ============================================================
+#                     GITIGNORE
+# ============================================================
+
+# Environment variables & secrets (NEVER COMMIT!)
+.env
+.env.local
+.env.*.local
+*.env
+
+# SQLite Database, WAL mode files & Automated Backups
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.db.bak*
+data.db
+backups/
+
+# Python byte-code & caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Operating System & IDE junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

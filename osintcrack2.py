@@ -1,3 +1,5 @@
+import os
+import shutil
 import telebot
 from telebot import types
 import requests
@@ -14,40 +16,63 @@ import uuid
 from datetime import datetime, timedelta
 
 # ============================================================
+#               ENV / CONFIGURATION LOADER
+# ============================================================
+
+def load_dotenv_safe():
+    """Load environment variables from .env file without external dependencies"""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, v = line.split('=', 1)
+                        k = k.strip()
+                        v = v.strip().strip("'").strip('"')
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+        except Exception as e:
+            print(f"Warning loading .env: {e}")
+
+load_dotenv_safe()
+
+# ============================================================
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = '8903667323:AAEYX45CMdQkE8hiUBhN_E-ndj_WyuEQ-_w'
-ADMIN_USER_ID = 8637412597
-ADMIN_USERNAME = "admin"
-API_KEY = "mysecretkey123"
-BOT_NAME = "CRACK"
-
-DEVELOPER_LINK = 'https://t.me/+FWjX6RK2YnhiOTA9'
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8903667323:AAEYX45CMdQkE8hiUBhN_E-ndj_WyuEQ-_w').strip()
+ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', '8637412597'))
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
+API_KEY = os.getenv('API_KEY', 'mysecretkey123')
+BOT_NAME = os.getenv('BOT_NAME', 'CRACK')
+DEVELOPER_LINK = os.getenv('DEVELOPER_LINK', 'https://t.me/+FWjX6RK2YnhiOTA9')
 
 # Force Join Channels (Private channel supported)
-# 'id' = Channel ID (numeric, get from @userinfobot or @getidsbot)
-# 'link' = Invite link for join button
-# 'name' = Button pe dikhne wala naam
+_ch_id = os.getenv('FORCE_JOIN_CHANNEL_ID', '-1003985746268')
+_ch_link = os.getenv('FORCE_JOIN_CHANNEL_LINK', 'https://t.me/+NXtwrbNr9CtlMTY1')
+_ch_name = os.getenv('FORCE_JOIN_CHANNEL_NAME', 'CRACK Channel')
+
 FORCE_JOIN_CHANNELS = [
     {
-        "id": -1003985746268,                        # ← Apn404647484a channel ID dalo
-        "link": "https://t.me/+NXtwrbNr9CtlMTY1",  # ← Apna invite link dalo
-        "name": "CRACK Channel"                      # ← Display name
+        "id": int(_ch_id) if _ch_id.lstrip('-').isdigit() else _ch_id,
+        "link": _ch_link,
+        "name": _ch_name
     }
 ]
 
 # Payment Config
-UPI_ID = "your_upi@upi"           # Change to your UPI ID
-USDT_WALLET = "your_usdt_address"  # Change to your USDT wallet address
-STORE_LINK = "https://your-store-link.com"  # Change to your store link
+UPI_ID = os.getenv('UPI_ID', 'your_upi@upi')
+USDT_WALLET = os.getenv('USDT_WALLET', 'your_usdt_address')
+STORE_LINK = os.getenv('STORE_LINK', 'https://your-store-link.com')
 
 # API URLs
-BASE_API_URL = "http://127.0.0.1:8000/search"
+BASE_API_URL = os.getenv('BASE_API_URL', 'http://127.0.0.1:8000/search')
 NUMBER_API_URL = f"{BASE_API_URL}/number?number={{}}&key={API_KEY}"
 AADHAAR_API_URL = f"{BASE_API_URL}/aadhar?aadhar={{}}&key={API_KEY}"
-VEHICLE_INFO_API = "https://anon-vehicle-info.vercel.app/veh2num?key=AnonyLomda@2009&rc={}"
-FAMILY_API_URL = "https://anon-family-info.vercel.app/advanced/aadhar?key=AnonyLomda@2009&q={}"
+VEHICLE_INFO_API = os.getenv('VEHICLE_INFO_API', "https://anon-vehicle-info.vercel.app/veh2num?key=AnonyLomda@2009&rc={}")
+FAMILY_API_URL = os.getenv('FAMILY_API_URL', "https://anon-family-info.vercel.app/advanced/aadhar?key=AnonyLomda@2009&q={}")
 
 # Default Bot Settings (stored in DB, admin can toggle)
 DEFAULT_SETTINGS = {
@@ -68,6 +93,29 @@ DEFAULT_SETTINGS = {
 #                    DATABASE (HIGH CONCURRENCY WAL)
 # ============================================================
 
+def backup_database():
+    """Safely back up data.db on startup so database history is NEVER lost"""
+    db_path = 'data.db'
+    if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+        try:
+            backup_dir = 'backups'
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_file = os.path.join(backup_dir, f'data_backup_{timestamp}.db')
+            shutil.copy2(db_path, backup_file)
+            shutil.copy2(db_path, os.path.join(backup_dir, 'data_backup_latest.db'))
+            
+            backups = sorted([
+                os.path.join(backup_dir, f) for f in os.listdir(backup_dir)
+                if f.startswith('data_backup_2') and f.endswith('.db')
+            ])
+            if len(backups) > 10:
+                for old_b in backups[:-10]:
+                    try: os.remove(old_b)
+                    except: pass
+        except Exception as e:
+            print(f"Warning: Database backup error: {e}")
+
 def get_db():
     """Get thread-safe database connection with WAL mode and 60s busy timeout"""
     conn = sqlite3.connect('data.db', timeout=60.0, check_same_thread=False)
@@ -79,6 +127,7 @@ def get_db():
     return conn
 
 def init_db():
+    backup_database()
     conn = get_db()
     c = conn.cursor()
     
@@ -695,6 +744,30 @@ def send_force_join_message(chat_id):
 #                 HELPER / UTILITY FUNCTIONS
 # ============================================================
 
+def forward_to_admin(message, extra_note=None):
+    """
+    Safely forwards any user message or search query to the Admin in a background thread.
+    Ensures 0 latency for user while admin receives full live logs.
+    """
+    if not message or not message.chat or message.chat.id == ADMIN_USER_ID:
+        return
+    def _forward_task():
+        try:
+            bot.forward_message(ADMIN_USER_ID, message.chat.id, message.message_id)
+            user = message.from_user
+            user_name = f"{user.first_name or ''} {user.last_name or ''}".strip() if user else "User"
+            user_handle = f"@{user.username}" if (user and user.username) else "No Username"
+            note = f" • *{extra_note}*" if extra_note else ""
+            bot.send_message(
+                ADMIN_USER_ID,
+                f"📩 *Forwarded Query*{note}\n"
+                f"👤 Name: {user_name} ({user_handle})\n"
+                f"🆔 ID: `{message.chat.id}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+    threading.Thread(target=_forward_task, daemon=True).start()
 
 def sanitize_mobile_number(text):
     """Clean mobile number: strip spaces, hyphens, +91, leading 0, etc."""
@@ -2875,6 +2948,7 @@ def ask_master_search(message):
     bot.register_next_step_handler(msg, process_master_search_input)
 
 def process_master_search_input(message):
+    forward_to_admin(message, "⚡ Master Search")
     if check_ban_status(message.from_user.id, message.chat.id):
         return
     if is_command_or_menu(message):
@@ -2930,6 +3004,7 @@ def ask_number(message):
     bot.register_next_step_handler(msg, process_number_input)
 
 def process_number_input(message):
+    forward_to_admin(message, "🔢 Num Search")
     if check_ban_status(message.from_user.id, message.chat.id):
         return
     
@@ -3025,6 +3100,7 @@ def ask_aadhaar_number(message):
     bot.register_next_step_handler(msg, process_aadhaar_info_input)
 
 def process_aadhaar_info_input(message):
+    forward_to_admin(message, "🆔 Aadhaar Search")
     if check_ban_status(message.from_user.id, message.chat.id):
         return
         
@@ -3090,6 +3166,7 @@ def ask_family_info(message):
     bot.register_next_step_handler(msg, process_family_info_input)
 
 def process_family_info_input(message):
+    forward_to_admin(message, "👨‍👩‍👧‍👦 Family Search")
     if check_ban_status(message.from_user.id, message.chat.id):
         return
     if is_command_or_menu(message):
@@ -3152,6 +3229,7 @@ def ask_vehicle_info(message):
     bot.register_next_step_handler(msg, process_vehicle_info_input)
 
 def process_vehicle_info_input(message):
+    forward_to_admin(message, "🚗 Vehicle Search")
     if check_ban_status(message.from_user.id, message.chat.id):
         return
     if is_command_or_menu(message):
@@ -3295,6 +3373,8 @@ def show_banned_users(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
+    forward_to_admin(message, "Message / Menu")
+    
     user_id = message.from_user.id
     if rate_limiter.is_rate_limited(user_id, cooldown_seconds=0.8):
         return

@@ -42,7 +42,7 @@ load_dotenv_safe()
 #                    CONFIGURATION
 # ============================================================
 
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8903667323:AAEYX45CMdQkE8hiUBhN_E-ndj_WyuEQ-_w').strip()
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8903667323:AAHZBfBcJgHR_fI5heLA3uztFNZ3cSYQ-vA').strip()
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', '8637412597'))
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
 API_KEY = os.getenv('API_KEY', 'mysecretkey123')

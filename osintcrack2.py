@@ -82,6 +82,7 @@ DEFAULT_SETTINGS = {
     'auto_verify': '0',
     'buy_from_store_enabled': '0',
     'redeem_code_enabled': '0',
+    'free_mode_enabled': '0',   # NEW: When ON, all users get all features free (no credits needed)
     'credit_price': '5',
     'monthly_price': '30',
     'store_link': STORE_LINK,
@@ -449,6 +450,15 @@ def deduct_credit(user_id):
     if not user_info:
         return False
     
+    # Free Mode: credit deduct nahi hoga, bas search count badhega
+    if is_setting_on('free_mode_enabled'):
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('UPDATE user_credits SET total_searches = total_searches + 1 WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    
     # Check if user has active membership (unlimited)
     if has_active_membership(user_id):
         # Don't deduct, just increment search count
@@ -508,7 +518,10 @@ def give_membership(user_id, days=30):
     conn.close()
 
 def can_search(user_id):
-    """Check if user can perform a search (has credits or membership)"""
+    """Check if user can perform a search (has credits or membership, or Free Mode is ON)"""
+    # Free Mode: sab users bina credits ke search kar sakte hain
+    if is_setting_on('free_mode_enabled'):
+        return True
     if has_active_membership(user_id):
         return True
     user_info = get_user_credits(user_id)
@@ -527,8 +540,11 @@ def get_vip_users_count():
     return result['cnt'] if result else 0
 
 def is_master_search_allowed(user_id):
-    """Check if user has access to Master Search (Admin, VIP member, or specifically granted by admin)"""
+    """Check if user has access to Master Search (Admin, VIP member, or specifically granted by admin, or Free Mode ON)"""
     if user_id == ADMIN_USER_ID:
+        return True
+    # Free Mode: sab users ko sab features milenge
+    if is_setting_on('free_mode_enabled'):
         return True
     if has_active_membership(user_id):
         return True
@@ -1379,7 +1395,9 @@ def show_admin_panel(chat_id):
     msg = f"⚙️ *{BOT_NAME} — Admin Panel*\n\n"
     msg += f"👥 Total Users: *{total_users}*\n"
     msg += f"💎 VIP Users: *{vip_users}*\n"
-    msg += f"💳 Pending Payments: *{pending_payments}*\n\n"
+    msg += f"💳 Pending Payments: *{pending_payments}*\n"
+    free_mode_on = is_setting_on('free_mode_enabled')
+    msg += f"🆓 Free Mode: *{'🟢 ON — Sab Users Free!' if free_mode_on else '🔴 OFF'}*\n\n"
     msg += f"👇 Choose an option:"
     
     bot.send_message(chat_id, msg, parse_mode="Markdown", reply_markup=markup)
@@ -1389,6 +1407,7 @@ def show_admin_settings(chat_id, message_id=None):
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     settings_list = [
+        ('free_mode_enabled', '🆓 Free Mode (All Features Free for Everyone)'),
         ('force_join_enabled', '🔒 Force Join'),
         ('upi_enabled', '💳 UPI Payment'),
         ('usdt_enabled', '💰 USDT Payment'),
@@ -1416,6 +1435,9 @@ def show_admin_settings(chat_id, message_id=None):
     markup.add(back_btn)
     
     msg = f"⚙️ *Bot Settings*\n\n"
+    free_mode_status = "🟢 ON — Sab Features Free!" if is_setting_on('free_mode_enabled') else "🔴 OFF — Credits/VIP Required"
+    msg += f"🆓 *Free Mode:* {free_mode_status}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"💳 UPI ID: `{get_setting('upi_id')}`\n"
     msg += f"💰 USDT: `{get_setting('usdt_wallet')}`\n"
     msg += f"🛒 Store: `{get_setting('store_link')}`\n"
@@ -2626,6 +2648,9 @@ def show_my_account(message):
         msg += f"💎 *Status:* VIP Member ✅\n"
         msg += f"📅 *Expiry:* `{expiry}`\n"
         msg += f"🔓 *Searches:* Unlimited\n"
+    elif is_setting_on('free_mode_enabled'):
+        msg += f"🆓 *Status:* Free Mode Active 🟢\n"
+        msg += f"🔓 *Searches:* Unlimited (Admin ne sabke liye free kiya hai!)\n"
     else:
         msg += f"🎁 *Daily Free Credit:* {daily_credits} (Resets at midnight)\n"
         msg += f"💰 *Premium Credits:* {credits}\n"
@@ -3403,6 +3428,7 @@ if __name__ == "__main__":
     print(f"🚀 {BOT_NAME} Bot is running...")
     print(f"📊 Admin ID: {ADMIN_USER_ID}")
     print(f"🔒 Force Join: {'ON' if is_setting_on('force_join_enabled') else 'OFF'}")
+    print(f"🆓 Free Mode: {'ON — All features free for everyone!' if is_setting_on('free_mode_enabled') else 'OFF — Credits/VIP required'}")
     print(f"💳 UPI: {'ON' if is_setting_on('upi_enabled') else 'OFF'}")
     print(f"💰 USDT: {'ON' if is_setting_on('usdt_enabled') else 'OFF'}")
     print(f"🤖 Auto Verify: {'ON' if is_setting_on('auto_verify') else 'OFF'}")

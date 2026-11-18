@@ -208,6 +208,9 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     
+    # Ensure free_mode_enabled exists in DB (for older databases)
+    c.execute('INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)', ('free_mode_enabled', '0'))
+    
     # High performance indexes for 10k users
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_id ON users(user_id);")
     c.execute("CREATE INDEX IF NOT EXISTS idx_user_credits_id ON user_credits(user_id);")
@@ -1406,8 +1409,17 @@ def show_admin_settings(chat_id, message_id=None):
     """Show settings toggle panel"""
     markup = types.InlineKeyboardMarkup(row_width=1)
     
+    # --- FREE MODE at the top (highlighted) ---
+    free_on = is_setting_on('free_mode_enabled')
+    free_label = f"{'🟢' if free_on else '🔴'} FREE MODE — {'ON (Sab Free!)' if free_on else 'OFF (Credits Required)'}"
+    free_btn = types.InlineKeyboardButton(free_label, callback_data="toggle_free_mode_enabled")
+    markup.add(free_btn)
+    
+    # Separator line button (non-clickable look)
+    markup.add(types.InlineKeyboardButton("─────── Other Settings ───────", callback_data="noop"))
+    
+    # Other settings
     settings_list = [
-        ('free_mode_enabled', '🆓 Free Mode (All Features Free for Everyone)'),
         ('force_join_enabled', '🔒 Force Join'),
         ('upi_enabled', '💳 UPI Payment'),
         ('usdt_enabled', '💰 USDT Payment'),
@@ -1422,10 +1434,10 @@ def show_admin_settings(chat_id, message_id=None):
         markup.add(btn)
     
     # Config buttons
-    upi_btn = types.InlineKeyboardButton(f"📝 Change UPI ID", callback_data="config_upi_id")
-    usdt_btn = types.InlineKeyboardButton(f"📝 Change USDT Wallet", callback_data="config_usdt_wallet")
-    store_btn = types.InlineKeyboardButton(f"📝 Change Store Link", callback_data="config_store_link")
-    price_btn = types.InlineKeyboardButton(f"📝 Change Prices", callback_data="config_prices")
+    upi_btn = types.InlineKeyboardButton("📝 Change UPI ID", callback_data="config_upi_id")
+    usdt_btn = types.InlineKeyboardButton("📝 Change USDT Wallet", callback_data="config_usdt_wallet")
+    store_btn = types.InlineKeyboardButton("📝 Change Store Link", callback_data="config_store_link")
+    price_btn = types.InlineKeyboardButton("📝 Change Prices", callback_data="config_prices")
     back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="admin_back")
     
     markup.add(upi_btn)
@@ -1434,8 +1446,8 @@ def show_admin_settings(chat_id, message_id=None):
     markup.add(price_btn)
     markup.add(back_btn)
     
+    free_mode_status = "🟢 ON — Sab Users Ko Sab Features FREE!" if free_on else "🔴 OFF — Credits / VIP Required"
     msg = f"⚙️ *Bot Settings*\n\n"
-    free_mode_status = "🟢 ON — Sab Features Free!" if is_setting_on('free_mode_enabled') else "🔴 OFF — Credits/VIP Required"
     msg += f"🆓 *Free Mode:* {free_mode_status}\n"
     msg += f"━━━━━━━━━━━━━━━━━━━━\n"
     msg += f"💳 UPI ID: `{get_setting('upi_id')}`\n"
@@ -1443,7 +1455,7 @@ def show_admin_settings(chat_id, message_id=None):
     msg += f"🛒 Store: `{get_setting('store_link')}`\n"
     msg += f"💵 Monthly: ₹{get_setting('monthly_price')}\n"
     msg += f"💵 Credits: ₹{get_setting('credit_price')}/10\n\n"
-    msg += f"Toggle karne ke liye button dabao:"
+    msg += f"👇 Toggle karne ke liye button dabao:"
     
     if message_id:
         try:
@@ -2315,6 +2327,11 @@ def handle_all_callbacks(call):
         return
     
     # --- Settings Toggle ---
+    if data == "noop":
+        # Separator button — do nothing, just dismiss spinner
+        bot.answer_callback_query(call.id)
+        return
+    
     if data.startswith("toggle_"):
         if user_id != ADMIN_USER_ID:
             bot.answer_callback_query(call.id, "❌ Unauthorized", show_alert=True)
@@ -2325,8 +2342,16 @@ def handle_all_callbacks(call):
         new_value = '0' if current == '1' else '1'
         set_setting(key, new_value)
         
-        status = "ON ✅" if new_value == '1' else "OFF ❌"
-        bot.answer_callback_query(call.id, f"Setting changed to {status}")
+        # Special alert for Free Mode toggle
+        if key == 'free_mode_enabled':
+            if new_value == '1':
+                bot.answer_callback_query(call.id, "🟢 FREE MODE ON! Sab users ko sab features free!", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, "🔴 FREE MODE OFF! Credits/VIP required.", show_alert=True)
+        else:
+            status = "ON ✅" if new_value == '1' else "OFF ❌"
+            bot.answer_callback_query(call.id, f"Setting changed to {status}")
+        
         show_admin_settings(chat_id, call.message.message_id)
         return
     
